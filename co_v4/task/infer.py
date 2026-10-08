@@ -636,6 +636,8 @@ def _devin_cost_free(doc, model):
         return False
     for fam in fams:
         variants = fam.get("variants") if isinstance(fam, dict) else None
+        if not isinstance(variants, list):
+            continue
         for v in variants or []:
             if isinstance(v, dict) and v.get("model_uid") == model:
                 return v.get("cost_tier") == "Free"
