@@ -222,8 +222,9 @@ def _spawn(argv, env, cwd, timeout, input_bytes=None, before_launch=None,
 
     Captures stdout/stderr via selector drain with a hard byte cap DURING
     the run (overflow kills), feeds optional stdin without deadlock, and
-    always terminates/reaps the whole group - on success, timeout,
-    overflow, or any BaseException. Returns (rc, out, err).
+    attempts bounded group cleanup on success, timeout, overflow and
+    exceptions. Missing stop proof retains the admission lease.
+    Returns (rc, out, err).
 
     The leader is only ever observed via waitid(WNOWAIT) - never reaped
     before _stop_group - so its pid cannot be reused under killpg and the

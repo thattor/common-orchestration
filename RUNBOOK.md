@@ -204,6 +204,7 @@ is released only after proof that a child was never started or that the owned
 process group was stopped and reaped. This does not prove remote provider
 cancellation. Parent death, absent stop proof or an ambiguous launch keeps the
 slot occupied across restarts. Other tasks can use the remaining slots.
+Repeated interrupts can also interrupt cleanup; an unconfirmed slot stays held.
 There is no time-based expiry, force-release or automatic resend. Preserve
 held records for investigation; do not delete the ledger to reset capacity.
 Use task `status` to inspect the affected job, and keep the existing restrictions

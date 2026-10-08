@@ -298,6 +298,22 @@ class CtypesErrorTests(unittest.TestCase):
 
 class PreflightTests(unittest.TestCase):
 
+    def test_unsupported_host_or_constants_refused_before_spawn(self):
+        for owner, name, value in ((child_status.sys, "platform", "linux"),
+                                   (child_status.os, "WNOWAIT", 0x01000000)):
+            with self.subTest(attribute=name), \
+                    mock.patch.object(owner, name, value), \
+                    mock.patch.object(infer.subprocess, "Popen") as spawn, \
+                    mock.patch.object(infer.os, "killpg") as send_signal:
+                before = mock.Mock()
+                self.assertFalse(child_status.supported())
+                with self.assertRaises(infer.RouteFailure):
+                    infer._spawn(["cmd"], {}, None, 10,
+                                 before_launch=before)
+                before.assert_not_called()
+                spawn.assert_not_called()
+                send_signal.assert_not_called()
+
     def test_supported_false_refuses_before_spawn(self):
         before = mock.MagicMock()
         with mock.patch.object(child_status, "supported",

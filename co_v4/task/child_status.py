@@ -145,6 +145,11 @@ def waitid(idtype, pid, options):
 
 def supported():
     """True iff some waitid backend is usable; never raises."""
+    if (sys.platform != "darwin" or platform.machine() != "arm64"
+            or any(getattr(os, name, None) != expected for name, expected in
+                   (("P_PID", _P_PID), ("WEXITED", _WEXITED),
+                    ("WNOHANG", _WNOHANG), ("WNOWAIT", _WNOWAIT)))):
+        return False
     if _native_waitid is not None:
         return True
     try:
