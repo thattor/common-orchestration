@@ -16,7 +16,7 @@ Every launch re-checks binary version, the active code argv template,
 config digest, and (devin) the Free cost tier via `devin models list`.
 Mismatch, unmeasured route, or missing binary is a hard stop; no fallback.
 
-Imports common and transcript only: no spec, journal, workspace, or runner.
+Uses shared admission and transcript validation; no spec, journal, workspace, or runner.
 """
 
 from __future__ import annotations
@@ -32,9 +32,12 @@ import signal
 import stat
 import subprocess
 import tempfile
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
+from . import admission
 from . import transcript
 from .common import (TaskError, RouteFailure, _ROUTE_RECOVERABLE,
                      PrivateFileLock, canonical, digest, parse_json,
@@ -152,35 +155,111 @@ def _write_private(path, data):
         raise
 
 
-def _stop_group(proc):
-    """Kill the whole owned pgid (leader may already be gone; leftover
-    children must not survive), then reap. The pid cannot be reused while
-    unwaited, so killpg cannot hit an unrelated group."""
+def _leader_running(proc):
+    """Non-reaping liveness check for the group leader.
+
+    waitid(WEXITED|WNOHANG|WNOWAIT) reports a pending exit without
+    consuming the waitable state, so the leader is never reaped here and
+    its pid stays owned/unreused for _stop_group's killpg. Returns False
+    once the leader has exited or ownership has been lost (ECHILD).
+    """
     try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
+        info = os.waitid(os.P_PID, proc.pid,
+                         os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    except (ChildProcessError, OSError):
+        return False
+    return info is None
+
+
+def _stop_group(proc):
+    """Kill the whole owned pgid, then reap; returns True only on proof.
+
+    Steps: (1) waitid(WNOWAIT) confirms the leader is still OUR unreaped
+    child - the pid cannot be reused while unwaited, so killpg cannot hit
+    an unrelated group; ECHILD here means lost ownership and no signal is
+    sent. (2) SIGKILL is attempted BEFORE any wait/reap; ESRCH means the
+    group is already gone, and EPERM or another OSError (observed on a
+    Darwin zombie-only group whose leader already exited) does NOT by
+    itself disprove success, so the bounded reap still runs. (3) the
+    leader is reaped with a bounded wait; TimeoutExpired or lost
+    ownership means no proof. (4) killpg(pid, 0) is probed until ESRCH
+    proves the group empty (bounded 5s); a group still present or still
+    EPERM at the deadline fails closed. Success requires BOTH the leader
+    reaped AND group absence. No destructive signal is ever sent after
+    the leader is reaped or ownership is lost; children that escaped the
+    group and remote cancellation are not guaranteed.
+    """
+    pid = proc.pid
+    try:
+        os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    except (ChildProcessError, OSError):
+        return False
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except OSError:
         pass
     try:
         proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
+    except (subprocess.TimeoutExpired, ChildProcessError):
+        return False
+    deadline = time.monotonic() + 5
+    while True:
         try:
-            proc.kill()
+            os.killpg(pid, 0)
+        except ProcessLookupError:
+            return True
         except OSError:
             pass
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            pass
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
 
 
-def _spawn(argv, env, cwd, timeout, input_bytes=None, before_launch=None):
+@contextmanager
+def _defer_signals():
+    """Block SIGINT/SIGTERM/SIGHUP for a bounded cleanup, then restore.
+
+    CLI signal handlers run on the main thread; leave other callers'
+    thread-local masks alone. Where pthread_sigmask is absent (already
+    refused in _spawn), this is a pass-through. Signals arriving while blocked stay
+    pending and are delivered on restore - after group cleanup and
+    evidence commits - so a real user interrupt is never swallowed.
+    """
+    if (not hasattr(signal, 'pthread_sigmask')
+            or threading.current_thread() is not threading.main_thread()):
+        yield
+        return
+    prev = signal.pthread_sigmask(
+        signal.SIG_BLOCK, (signal.SIGINT, signal.SIGTERM, signal.SIGHUP))
+    try:
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, prev)
+
+
+def _spawn(argv, env, cwd, timeout, input_bytes=None, before_launch=None,
+           *, on_stopped=None):
     """Bounded shell-free exec in its own process group.
 
     Captures stdout/stderr via selector drain with a hard byte cap DURING
     the run (overflow kills), feeds optional stdin without deadlock, and
     always terminates/reaps the whole group - on success, timeout,
     overflow, or any BaseException. Returns (rc, out, err).
+
+    The leader is only ever observed via waitid(WNOWAIT) - never reaped
+    before _stop_group - so its pid cannot be reused under killpg and the
+    original exit status survives the reap. Platforms lacking the waitid
+    or killpg surface are refused before Popen. on_stopped(bool) is
+    invoked exactly once per successfully spawned child, after cleanup;
+    a False stop proof on an otherwise clean run raises
+    TaskError("route_stop_unconfirmed").
     """
+    if (not all(hasattr(os, n) for n in ("waitid", "killpg", "P_PID",
+                                         "WEXITED", "WNOHANG", "WNOWAIT"))
+            or not hasattr(signal, 'pthread_sigmask')):
+        if before_launch is not None:
+            raise RouteFailure("route_unavailable", "not_started", "spawn")
+        raise TaskError("route_unavailable")
     if before_launch is not None:
         before_launch()
     try:
@@ -193,12 +272,13 @@ def _spawn(argv, env, cwd, timeout, input_bytes=None, before_launch=None):
             raise RouteFailure("route_unavailable", "not_started", "spawn")
         raise TaskError("route_unavailable")
     sel = None
+    timed_out = overflow = stopped = False
+    body_exc = None
     try:
         sel = selectors.DefaultSelector()
         out_b, err_b = bytearray(), bytearray()
         in_view = memoryview(input_bytes) if input_bytes else None
         in_off = 0
-        timed_out = overflow = False
         for f, tag in ((proc.stdout, "out"), (proc.stderr, "err")):
             os.set_blocking(f.fileno(), False)
             sel.register(f, selectors.EVENT_READ, tag)
@@ -209,7 +289,7 @@ def _spawn(argv, env, cwd, timeout, input_bytes=None, before_launch=None):
             proc.stdin.close()
         deadline = time.monotonic() + timeout
         done_since = None
-        while (sel.get_map() or proc.poll() is None) and not (timed_out or overflow):
+        while (sel.get_map() or _leader_running(proc)) and not (timed_out or overflow):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 timed_out = True
@@ -248,30 +328,60 @@ def _spawn(argv, env, cwd, timeout, input_bytes=None, before_launch=None):
                 if len(out_b) + len(err_b) > MAX_CAPTURE:
                     overflow = True
                     break
-            if proc.poll() is not None:
+            if not _leader_running(proc):
                 if done_since is None:
                     done_since = time.monotonic()
                 elif time.monotonic() - done_since > LEADER_GRACE:
                     break
             else:
                 done_since = None
+    except BaseException as exc:
+        body_exc = exc
+        raise
     finally:
-        if sel is not None:
+        with _defer_signals():
+            cleanup_exc = cb_exc = None
+            if sel is not None:
+                try:
+                    sel.close()
+                except Exception:
+                    pass
+                except BaseException as exc:
+                    if cleanup_exc is None:
+                        cleanup_exc = exc
+            for f in (proc.stdin, proc.stdout, proc.stderr):
+                try:
+                    if f and not f.closed:
+                        f.close()
+                except Exception:
+                    pass
+                except BaseException as exc:
+                    if cleanup_exc is None:
+                        cleanup_exc = exc
             try:
-                sel.close()
+                stopped = _stop_group(proc)
             except Exception:
-                pass
-        for f in (proc.stdin, proc.stdout, proc.stderr):
-            try:
-                if f and not f.closed:
-                    f.close()
-            except OSError:
-                pass
-        _stop_group(proc)
+                stopped = False
+            except BaseException as exc:
+                stopped = False
+                if cleanup_exc is None:
+                    cleanup_exc = exc
+            if on_stopped is not None:
+                try:
+                    on_stopped(stopped)
+                except BaseException as exc:
+                    cb_exc = exc
+            if body_exc is None and not (timed_out or overflow):
+                if cleanup_exc is not None:
+                    raise cleanup_exc
+                if cb_exc is not None:
+                    raise cb_exc
     if overflow:
         raise TaskError("route_overflow")
     if timed_out:
         raise TaskError("route_timeout")
+    if not stopped:
+        raise TaskError("route_stop_unconfirmed")
     return proc.returncode, bytes(out_b), bytes(err_b)
 
 
@@ -445,9 +555,11 @@ def _devin_denial_evidence(kind, parsed, raw, canary, target, secret):
 def _call_claude(binary, model, prompt, cwd, env, timeout, meta_dir,
                  before_launch=None):
     argv = _render(_CLAUDE_ARGV_TEMPLATE, bin=binary, model=model)
-    bl = {} if before_launch is None else {"before_launch": before_launch}
-    rc, out, err = _spawn(argv, env, cwd, timeout,
-                          input_bytes=prompt.encode(), **bl)
+    rc, out, err = admission.model_call(
+        "claude", model, prompt, Path(meta_dir),
+        lambda **hooks: _spawn(argv, env, cwd, timeout,
+                               input_bytes=prompt.encode(), **hooks),
+        before_launch=before_launch)
     _write_private(Path(meta_dir) / "claude-stream.jsonl", out)
     _write_private(Path(meta_dir) / "claude-stderr.txt", err)
     if rc != 0:
@@ -469,8 +581,10 @@ def _devin_capture(binary, model, config, prompt, cwd, env, timeout,
     argv = _render(_DEVIN_ARGV_TEMPLATE, bin=binary, model=model,
                    config=str(config), prompt_file=str(pf),
                    export_file=str(ef))
-    bl = {} if before_launch is None else {"before_launch": before_launch}
-    rc, out, err = _spawn(argv, env, cwd, timeout, **bl)
+    rc, out, err = admission.model_call(
+        "devin", model, prompt, meta_dir,
+        lambda **hooks: _spawn(argv, env, cwd, timeout, **hooks),
+        before_launch=before_launch)
     _write_private(meta_dir / "devin-stdout.txt", out)
     _write_private(meta_dir / "devin-stderr.txt", err)
     if rc != 0:
@@ -697,6 +811,17 @@ def _setup_route(name, cwd, env, config, probe_root, known_ctx, timeout,
                  fail_info, model=None):
     if model is None:
         model = ROUTE_DEFAULT_MODEL[name]
+    with admission.gate(cwd, setup=True,
+                        binding={"route": name, "model": model}):
+        return _setup_route_ungated(name, cwd, env, config, probe_root,
+                                    known_ctx, timeout, fail_info,
+                                    model=model)
+
+
+def _setup_route_ungated(name, cwd, env, config, probe_root, known_ctx,
+                         timeout, fail_info, model=None):
+    if model is None:
+        model = ROUTE_DEFAULT_MODEL[name]
     tmpl = _CLAUDE_ARGV_TEMPLATE if name == "claude" else _DEVIN_ARGV_TEMPLATE
     fail_info["route"] = name
     binary = shutil.which(name)
@@ -777,43 +902,44 @@ def setup_routes(state_dir, native_cwd, timeout=180, reprobe=False):
         raise TaskError("input_invalid")
     except ValueError:
         pass
-    routes_path = state_dir / ROUTES_FILE
-    if routes_path.exists() and not reprobe:
-        raise TaskError("route_exists")
     priv = private_dir(state_dir, exist_ok=True)
-    fail_path = priv / "route_setup_failure.json"
-    try:
-        fail_path.unlink()
-    except OSError:
-        pass
-    probe_root = private_dir(priv / "probes", exist_ok=True)
-    config = priv / "devin-no-tools.json"
-    _write_private(config,
-                   (json.dumps(DEVIN_NO_TOOLS_CONFIG, indent=2) + "\n").encode())
-    env = _child_env()
-    known_ctx = _known_context(native_cwd)
-    registry = {"schema": ROUTES_SCHEMA, "created": int(time.time()),
-                "cwd": str(native_cwd), "known_context": known_ctx,
-                "role_models": {r: [t, m] for r, (t, m) in ROLE_MODELS.items()},
-                "routes": {}}
-    for name in ("claude", "devin"):
-        fail_info = {"route": name, "probe": None, "version": None,
-                     "reason": None}
+    routes_path = state_dir / ROUTES_FILE
+    with PrivateFileLock(state_dir / "infer.lock", busy_code="route_busy"):
+        if routes_path.exists() and not reprobe:
+            raise TaskError("route_exists")
+        fail_path = priv / "route_setup_failure.json"
         try:
-            registry["routes"][name] = _setup_route(
-                name, native_cwd, env, config, probe_root, known_ctx,
-                timeout, fail_info)
-        except TaskError as exc:
-            _write_private(fail_path, canonical({
-                "code": _code(exc), "route": name,
-                "probe": fail_info["probe"],
-                "version": fail_info["version"],
-                "reason": fail_info["reason"]}).encode())
-            raise
-    registry["cwd_fingerprint"] = _tree_fingerprint(native_cwd)
-    _write_private(routes_path,
-                   (json.dumps(registry, indent=2, sort_keys=True) + "\n").encode())
-    return registry
+            fail_path.unlink()
+        except OSError:
+            pass
+        probe_root = private_dir(priv / "probes", exist_ok=True)
+        config = priv / "devin-no-tools.json"
+        _write_private(config,
+                       (json.dumps(DEVIN_NO_TOOLS_CONFIG, indent=2) + "\n").encode())
+        env = _child_env()
+        known_ctx = _known_context(native_cwd)
+        registry = {"schema": ROUTES_SCHEMA, "created": int(time.time()),
+                    "cwd": str(native_cwd), "known_context": known_ctx,
+                    "role_models": {r: [t, m] for r, (t, m) in ROLE_MODELS.items()},
+                    "routes": {}}
+        for name in ("claude", "devin"):
+            fail_info = {"route": name, "probe": None, "version": None,
+                         "reason": None}
+            try:
+                registry["routes"][name] = _setup_route(
+                    name, native_cwd, env, config, probe_root, known_ctx,
+                    timeout, fail_info)
+            except TaskError as exc:
+                _write_private(fail_path, canonical({
+                    "code": _code(exc), "route": name,
+                    "probe": fail_info["probe"],
+                    "version": fail_info["version"],
+                    "reason": fail_info["reason"]}).encode())
+                raise
+        registry["cwd_fingerprint"] = _tree_fingerprint(native_cwd)
+        _write_private(routes_path,
+                       (json.dumps(registry, indent=2, sort_keys=True) + "\n").encode())
+        return registry
 
 
 # --- measured route client --------------------------------------------------
@@ -872,6 +998,13 @@ def _validate_entry(e, route, model, cwd):
     return e
 
 
+def _devin_config_intact(e):
+    try:
+        return digest(Path(e["config"]).read_bytes()) == e.get("config_digest")
+    except OSError:
+        return False
+
+
 def _infer_pinned(state_dir, selection, role, prompt, call_dir, timeout,
                   load_entry, before_launch=None):
     """Run an already-chosen selection through the measured Native path.
@@ -908,36 +1041,43 @@ def _infer_pinned(state_dir, selection, role, prompt, call_dir, timeout,
 
         before_launch = _hook
     bl = {} if before_launch is None else {"before_launch": before_launch}
-    with PrivateFileLock(Path(state_dir) / "infer.lock", busy_code="route_busy"):
+    with PrivateFileLock(Path(state_dir) / "infer.lock",
+                         busy_code="route_busy", shared=True):
         try:
             e = load_entry(route, model)
             if e.get("measurement_digest") != pinned:
                 raise TaskError("route_unmeasured")
-            _check_launch(e)
-            call_dir = private_dir(Path(call_dir), exist_ok=True)
+            call_dir = private_dir(Path(call_dir), exist_ok=True).resolve(strict=True)
             cwd = Path(e["native_cwd"])
-            known_context = _known_context(cwd)
-            env = _child_env()
-            if route == "claude":
-                res = _with_cwd_check(
-                    cwd, lambda: _call_claude(
-                        e["binary"], model, prompt, cwd, env, timeout,
-                        call_dir, **bl))
-            else:
-                res = _with_cwd_check(
-                    cwd, lambda: _call_devin(
-                        e["binary"], model, Path(e["config"]), prompt,
-                        cwd, env, timeout, call_dir, e["version"], **bl))
-            if cb_state is not None and not cb_state["called"]:
-                raise TaskError("route_violation")
-            selection_digest = digest(canonical(selection).encode())
-            _write_private(call_dir / "meta.json", canonical({
-                "role": role, "route": route, "model": model,
-                "version": e.get("version"),
-                "argv_digest": e.get("argv_digest"),
-                "measurement_digest": e.get("measurement_digest"),
-                "selection_digest": selection_digest,
-                "time": int(time.time())}).encode())
+            with admission.gate(cwd, state_dir=state_dir, binding=selection):
+                _check_launch(e)
+                known_context = _known_context(cwd)
+                env = _child_env()
+                try:
+                    if route == "claude":
+                        res = _with_cwd_check(
+                            cwd, lambda: _call_claude(
+                                e["binary"], model, prompt, cwd, env,
+                                timeout, call_dir, **bl))
+                    else:
+                        res = _with_cwd_check(
+                            cwd, lambda: _call_devin(
+                                e["binary"], model, Path(e["config"]),
+                                prompt, cwd, env, timeout, call_dir,
+                                e["version"], **bl))
+                finally:
+                    if route == "devin" and not _devin_config_intact(e):
+                        raise TaskError("route_unmeasured")
+                if cb_state is not None and not cb_state["called"]:
+                    raise TaskError("route_violation")
+                selection_digest = digest(canonical(selection).encode())
+                _write_private(call_dir / "meta.json", canonical({
+                    "role": role, "route": route, "model": model,
+                    "version": e.get("version"),
+                    "argv_digest": e.get("argv_digest"),
+                    "measurement_digest": e.get("measurement_digest"),
+                    "selection_digest": selection_digest,
+                    "time": int(time.time())}).encode())
         except TaskError as exc:
             if (cb_state is None or exc is cb_state["error"]
                     or exc.code not in _ROUTE_RECOVERABLE):

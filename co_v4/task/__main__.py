@@ -4,7 +4,7 @@ Exactly one JSON object on stdout; bounded progress on stderr.  Exit 0
 only when the task verified (or setup/status/decide succeeded); failures
 are nonzero.  ``decide`` only records an already-presented user choice
 for a paused task; it performs no inference and its success does not
-mean the task verified -- resume separately.  SIGTERM/SIGINT unwind
+mean the task verified -- resume separately.  SIGTERM/SIGINT/SIGHUP unwind
 infer/verifier cleanup; an interrupted run stays resumable and never
 claims a confirmed stop.
 """
@@ -16,6 +16,7 @@ import signal
 import sys
 from pathlib import Path
 
+from . import admission
 from . import infer as _infer
 from . import runner
 from . import select as _select
@@ -84,6 +85,9 @@ def _parser():
     f.add_argument("--source-ref", required=True)
     h = rtsub.add_parser("show")
     h.add_argument("--state-dir", required=True)
+    cap = sub.add_parser("capacity")
+    capsub = cap.add_subparsers(dest="capacity_cmd", required=True)
+    capsub.add_parser("status")
     for name in ("resume", "status"):
         q = sub.add_parser(name)
         q.add_argument("--state-dir", required=True)
@@ -225,9 +229,13 @@ def main(argv=None):
     else:
         args = _parser().parse_args(raw)
     signal.signal(signal.SIGTERM, _sigterm)
+    signal.signal(signal.SIGHUP, _sigterm)
     try:
-        state = Path(args.state_dir)
-        if args.cmd == "setup":
+        state = None if args.cmd == "capacity" else Path(args.state_dir)
+        if args.cmd == "capacity":
+            out, code = ({"status": "ok",
+                          "capacity": admission.capacity_status()}, 0)
+        elif args.cmd == "setup":
             if args.legacy:
                 reg = _infer.setup_routes(state, Path(args.native_cwd),
                                           timeout=args.timeout)

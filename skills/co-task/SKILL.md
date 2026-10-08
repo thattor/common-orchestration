@@ -33,6 +33,13 @@ Thin operator window over the installed `co_v4.task` CLI. The CLI owns state, mo
 - Prefer argv arrays; where a shell string is required, single-quote safely. Use equals syntax (`--goal=...`) so leading dashes are not parsed as flags. Never interpolate untrusted worker text into commands.
 - Announce scope, mode and verifier once, unless the user asked for quiet. Authorized normal work needs no repeated approval.
 
+## Independent concurrent tasks
+
+- Multiple independent goals may use separate ordinary `run` commands in owned foreground sessions, including the same qualified state. Keep each command's task and result identifiers separate. Dependent work still waits for its required output; do not send the same job twice.
+- `capacity status` is a read-only command without `--state-dir`. Task calls across states and models share 12 slots per Native adapter. `capacity_full` is a refusal before sending, not a queue or permission to switch models.
+- Setup and route measurement conflict with inference in the same Native workspace. Preserve `route_busy` and unknown-outcome records; do not create alternate state or delete the host ledger to evade them.
+- Stop older runtime processes before using the new host-wide limit. A pre-0.4.5 runtime using another state does not share the ledger. Follow RUNBOOK for held slots; this skill grants no force-release authority.
+
 ## State, setup, routes
 
 - `setup` makes REAL model probes and briefly creates owned canaries; the default probes BOTH current presets, so invoke it only when both routes are authorized, into a fresh private state dir outside the repo and the Native cwd.

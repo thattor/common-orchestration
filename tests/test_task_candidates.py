@@ -20,7 +20,7 @@ from pathlib import Path
 from unittest import mock
 
 import co_v4.task.select as m
-from co_v4.task import infer
+from co_v4.task import admission, infer
 from co_v4.task.common import TaskError, canonical, digest
 
 CLAUDE_MODEL = "claude-opus-5-5"
@@ -57,7 +57,11 @@ def _measured_entry(route, model, cwd, version="0.1.0-test",
     }
     if route == "devin":
         entry["tools_schema_digest"] = infer.DEVIN_TOOLS_DIGEST
-        entry["config"] = str(Path(cwd) / "devin-config.json")
+        config = Path(cwd).parent / (Path(cwd).name + '-fixture-config.json')
+        config.write_text('{"fixture": true}')
+        config.chmod(0o600)
+        entry["config"] = str(config)
+        entry["config_digest"] = digest(config.read_bytes())
     entry["measurement_digest"] = infer._measurement_digest(entry)
     return entry
 
@@ -86,6 +90,9 @@ class _Base(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.root = Path(self._tmp.name).resolve()
+        host = mock.patch.object(admission, '_host_root', return_value=self.root / 'host')
+        host.start()
+        self.addCleanup(host.stop)
         os.chmod(self.root, 0o700)
         self.state = self.root / "state"
         self.native = self.root / "native"
