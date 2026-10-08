@@ -68,6 +68,66 @@ Candidate order and fit determine ties. Existing registries are not silently
 rewritten. `setup --legacy` retains the old setup API for task/1 state; it is
 not needed for a new task/3 run.
 
+### Reusing CO from another project
+
+Keep the runtime, bundled Skill and state references in the project's existing
+entry point, such as `AGENTS.md`, or in an existing local configuration file
+that entry point names. A new chat should read those references before asking
+where CO is installed. This is an explicit reference convention; CO does not
+scan for installations or maintain a separate project registry.
+
+Use absolute paths for the current machine. For example, adapt this block in
+the existing project entry; the values below are placeholders, not settings
+to copy unchanged:
+
+```text
+Common Orchestration for this project:
+  Repository: /absolute/path/to/this-project
+  Runtime: /absolute/path/to/common-orchestration-runtime
+  Skill: /absolute/path/to/common-orchestration-runtime/skills/co-task/SKILL.md
+  Python: /opt/homebrew/bin/python3.13
+  State: /absolute/path/to/private-co-state/this-project
+  Native workspace: /absolute/path/to/already-trusted-native-workspace
+  Authorization: <existing project instructions or owner decision reference>
+```
+
+Normally use a separate state directory for each project. A suitable macOS
+location is `$HOME/Library/Application Support/CommonOrchestration/<project-id>`
+with a distinct project ID; expand it to an absolute path in the reference.
+This is a recommendation, not a new required location or a migration command.
+Keep a working, authorized existing state where it is. State must remain
+outside both the target repository and the Native workspace and private to
+the user. It contains route measurements, prompts, decisions, work copies and
+results; exclude it from Git, release archives and shared configuration.
+Do not put credentials in the reference block.
+
+When locating an existing setup:
+
+1. Read the invocation and the existing project entry, following only its
+   explicit configuration references. Confirm that the repository and
+   authorization apply to the current task; a path reference does not grant
+   permission to use every model recorded in that state.
+2. If the references identify one authorized setup, use it without asking
+   for the same paths again. Confirm the runtime's `VERSION`, Python version
+   and CLI help. The recorded Skill must belong to that runtime.
+3. To inspect an existing task/2 or task/3 registry, run
+   `python -E -s -B -m co_v4.task routes show --state-dir '<absolute state path>'`
+   from that runtime with stdin from `/dev/null`. This reads recorded
+   candidates; it makes no model calls and does not prove that a route is
+   currently usable. Legacy task/1 state uses `routes.json`; a missing
+   `routes2.json` is not permission to replace that state.
+4. If a required reference is missing, conflicts with another applicable
+   reference, points to a missing installation/state, or exceeds the current
+   authorization, report the specific unresolved item. Ask only for the
+   location or decision that the existing project context cannot resolve.
+
+First-time registration is separate from discovery: record the selected
+references only within the authorized project scope. Creating a private
+directory is also separate from `setup` or `routes add`, which make real
+model calls. Do not silently create, overwrite, move or remeasure state to
+make a reference work. No global Skill or Plugin installation is required
+by this convention.
+
 Add these options to `run` **before `--verify`**:
 
 - `--mode suitability` (default): select using the step's focus and candidate fit.

@@ -12,8 +12,11 @@ Thin operator window over the installed `co_v4.task` CLI. The CLI owns state, mo
 ## Locating inputs
 
 - Take the runtime directory, state directory, target repository and Python interpreter from the invocation or project context (named runtime, previously configured state). Inspect existing context before asking; ask only when location or scope is genuinely missing or ambiguous.
+- Read the project's existing entry point and the local configuration it explicitly references for its CO runtime, bundled Skill, state, Python and already-trusted Native workspace. Follow named references only; confirm they apply to the current repository and authorization. The RUNBOOK's "Reusing CO from another project" section gives a reference block for an existing entry, without a second registry.
+- One matching authorized setup is enough to proceed; do not ask for its paths again. A missing path, conflicting applicable references or a scope mismatch needs only the unresolved location/decision. Do not infer permission from the reference itself or pick the first runtime/state found.
 - If this file sits at `<runtime>/skills/co-task/SKILL.md`, that `<runtime>` is the runtime - confirm its `VERSION` and run `python -E -s -B -m co_v4.task decide --help` from it before relying on the required command. No broad filesystem search.
 - Never silently choose among multiple runtime copies, and never install a runtime or edit global config as part of task work.
+- Preserve working state at its existing authorized path. Normally keep separate private state per project, outside both the target repo and Native workspace; never commit its contents. Recording a reference or creating a directory does not authorize real setup probes, a state migration, or new model access.
 - Report runtime errors as observed; they are not automatically an old-version problem. (task/3 state does require a runtime newer than 0.4.2.)
 
 ## Command shape
@@ -42,6 +45,7 @@ Thin operator window over the installed `co_v4.task` CLI. The CLI owns state, mo
 
 ## State, setup, routes
 
+- Discovery is read-only. For an existing task/2 or task/3 registry, `routes show --state-dir <absolute path>` reads recorded candidates without model calls; it does not revalidate availability. Legacy task/1 state uses `routes.json`. Missing state or `routes2.json` is not permission to create or replace a setup.
 - `setup` makes REAL model probes and briefly creates owned canaries; the default probes BOTH current presets, so invoke it only when both routes are authorized, into a fresh private state dir outside the repo and the Native cwd.
 - `routes add` can initialize empty state for ONE exact route/model and attaches known preset fits. Unrecognized models need an explicit `routes fit` declaration (category/degree/origin/source-ref); never invent suitability.
 - Normal runs reuse already-measured state. Run setup/add/fit only inside actually requested authorization - not merely to unblock a failing task. Existing auth, trust and cost constraints stand; if the same scoped setup was already authorized, do not re-ask.
