@@ -1,0 +1,10 @@
+{
+  "hook_event_name": "PermissionRequest",
+  "tool_name": "exec",
+  "tool_input": {
+    "command": "git push origin HEAD",
+    "shell_id": "main"
+  },
+  "session_id": "fixture-session-0000",
+  "prompt_id": "fixture-prompt-0000"
+}

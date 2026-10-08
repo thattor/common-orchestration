@@ -1,0 +1,42 @@
+Qwen3-0.6B chat template — derivation provenance for CO 0.4
+
+The qualified provider launches with --chat-template-file pointing at a
+template DERIVED from the upstream file. No upstream JSON and no .jinja
+file are shipped in this distribution; the operator reproduces the
+derived bytes locally per RUNBOOK §3.
+
+Upstream source
+  file:        tokenizer_config.json
+  repository:  https://huggingface.co/Qwen/Qwen3-0.6B
+  revision:    16706fc57485378d4ffaf54139b29ccc66ae08fa
+  download:    https://huggingface.co/Qwen/Qwen3-0.6B/resolve/16706fc57485378d4ffaf54139b29ccc66ae08fa/tokenizer_config.json
+  sha256:      bbc2c089e3bef8753f63348c10595767be8998bc6ca7c7ebcaada346d401fba8
+
+Extraction (strict JSON parse; duplicate keys and non-finite constants
+rejected; UTF-8, no added newline)
+  chat_template string: 4116 bytes
+  sha256: 87a2728cb8dc9fe424d624542f6060ec05a1d285ebbec578bb078900e33396b5
+
+Exact substring replacement — applied exactly once, no fuzz
+(count(old) == 1 is required; any mismatch fails closed):
+
+  OLD:
+{%- for message in messages[::-1] %}
+    {%- set index = (messages|length - 1) - loop.index0 %}
+    {%- if ns.multi_step_tool and message.role == "user" and not(message.content.startswith('<tool_response>') and message.content.endswith('</tool_response>')) %}
+
+  NEW:
+{%- for index in range(ns.last_query_index, -1, -1) %}
+    {%- set message = messages[index] %}
+    {%- if ns.multi_step_tool and message.role == "user" and not('<tool_response>' in message.content and '</tool_response>' in message.content) %}
+
+Derived template
+  4100 bytes, UTF-8, no extra newline
+  sha256: 57f1fd00f0013a2be96aa79b857391f27e23df5b5f847072b524c897e24d0361
+
+The diff lines come from the Apache-2.0 upstream file; see
+LICENSE-Apache-2.0 in this directory (the byte-identical official
+license text). The derived bytes are byte-identical to the
+release-measured template — the deterministic-derivation comparison is
+recorded in the release evidence. The original modification's author
+and time are unknown and unverified; that is stated, not hidden.

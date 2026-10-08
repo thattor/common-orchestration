@@ -1,0 +1,150 @@
+name: Common Orchestration checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    name: CO runtime / Python ${{ matrix.python }}
+    runs-on: macos-15
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12', '3.13']
+    defaults:
+      run:
+        shell: bash
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      PYTHON_VERSION: ${{ matrix.python }}
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONNOUSERSITE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify exact head and runner
+        run: |
+          set -euo pipefail
+          actual_sha=$(git rev-parse HEAD)
+          [[ "$actual_sha" == "$EXPECTED_SHA" ]] || { echo '::error::Checkout differs from the requested head'; exit 1; }
+          [[ -n "${RUNNER_NAME:-}" && "${RUNNER_OS:-}" == macOS && "${RUNNER_ARCH:-}" == ARM64 ]] || { echo '::error::Missing or incorrect runner identity'; exit 1; }
+          [[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] || { echo '::error::Expected native Darwin arm64'; exit 1; }
+          printf 'head=%s runner=%s os=%s arch=%s\n' "$actual_sha" "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH"
+          printf '### CO runtime / Python %s\n\n- Head: `%s`\n- Runner: `%s` (%s/%s)\n' "$PYTHON_VERSION" "$actual_sha" "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH" >> "$GITHUB_STEP_SUMMARY"
+      - name: Resolve installed Python outside HOME
+        run: |
+          set -euo pipefail
+          candidates=(
+            "/opt/homebrew/opt/python@${PYTHON_VERSION}/bin/python${PYTHON_VERSION}"
+            "/opt/homebrew/bin/python${PYTHON_VERSION}"
+          )
+          python_bin=''
+          for candidate in "${candidates[@]}"; do
+            if [[ -x "$candidate" ]]; then python_bin="$candidate"; break; fi
+          done
+          if [[ -z "$python_bin" ]]; then
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install "python@${PYTHON_VERSION}"
+            for candidate in "${candidates[@]}"; do
+              if [[ -x "$candidate" ]]; then python_bin="$candidate"; break; fi
+            done
+          fi
+          [[ -n "$python_bin" ]] || { echo "::error::Required Python ${PYTHON_VERSION} is unavailable"; exit 1; }
+          "$python_bin" -B - <<'PY'
+          import os, platform, sys
+          expected = tuple(map(int, os.environ['PYTHON_VERSION'].split('.')))
+          if sys.version_info[:2] != expected or platform.machine() != 'arm64':
+              raise SystemExit('Interpreter version/architecture mismatch')
+          base_python = os.path.realpath(getattr(sys, '_base_executable', sys.executable))
+          if base_python.startswith(os.path.expanduser('~') + os.sep):
+              raise SystemExit('Interpreter resolves inside HOME; an outside-HOME runtime is required')
+          print(f'python={sys.executable} base={base_python} version={platform.python_version()} arch={platform.machine()}')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(f'- Interpreter: `{sys.executable}` ({platform.python_version()}); base: `{base_python}`\n')
+          PY
+          printf 'V4_PYTHON=%s\n' "$python_bin" >> "$GITHUB_ENV"
+      # SDK setup: fresh per-run venv under RUNNER_TEMP (mktemp unique dir;
+      # nothing pre-existing is removed), explicit anonymous public PyPI.
+      # Resolution/install failure fails the job; no fallback, no self-skip.
+      - name: Install pinned OpenAI SDK into isolated venv
+        run: |
+          set -euo pipefail
+          [[ -n "${RUNNER_TEMP:-}" ]] || { echo '::error::RUNNER_TEMP is not set'; exit 1; }
+          venv=$(mktemp -d "$RUNNER_TEMP/ci-venv.${GITHUB_RUN_ID:-manual}.${GITHUB_RUN_ATTEMPT:-0}.${PYTHON_VERSION}.XXXXXX")
+          "$V4_PYTHON" -B -m venv "$venv"
+          "$venv/bin/python" -B -m pip install --isolated --no-input \
+              --keyring-provider disabled --index-url https://pypi.org/simple \
+              --disable-pip-version-check --timeout 30 --retries 2 \
+              -r requirements-sdk-test.txt
+          printf 'CI_VENV=%s\n' "$venv" >> "$GITHUB_ENV"
+      - name: Verify pinned SDK and native interpreter in venv
+        run: |
+          set -euo pipefail
+          expected_sdk=$(sed -n 's/^openai==\([^[:space:]#]*\).*/\1/p' \
+              requirements-sdk-test.txt)
+          [[ -n "$expected_sdk" ]] || { echo '::error::openai pin missing from requirements-sdk-test.txt'; exit 1; }
+          EXPECTED_SDK="$expected_sdk" "$CI_VENV/bin/python" -B - <<'PY'
+          import os, platform, sys
+          import openai
+          expected = tuple(map(int, os.environ['PYTHON_VERSION'].split('.')))
+          if sys.version_info[:2] != expected or platform.machine() != 'arm64':
+              raise SystemExit('venv interpreter version/architecture mismatch')
+          if not openai.__file__.startswith(os.environ['CI_VENV'] + os.sep):
+              raise SystemExit('openai resolved outside the isolated venv')
+          if openai.__version__ != os.environ['EXPECTED_SDK']:
+              raise SystemExit('openai SDK version mismatch: %r' % (openai.__version__,))
+          print('venv=%s python=%s openai=%s arch=%s'
+                % (sys.executable, platform.python_version(),
+                   openai.__version__, platform.machine()))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('- SDK: `openai==%s` in isolated venv `%s`\n'
+                            % (openai.__version__, sys.executable))
+          PY
+      - name: Unit, Contract and current integration tests (offline)
+        env:
+          PYTHONPATH: .
+          CO_CODEX_HOST_FIXTURE: '1'
+        run: |
+          set -euo pipefail
+          "$CI_VENV/bin/python" -B run_ci_tests.py
+      - name: Verify deterministic release build
+        run: |
+          set -euo pipefail
+          [[ -n "${RUNNER_TEMP:-}" ]] || { echo '::error::RUNNER_TEMP is not set'; exit 1; }
+          "$V4_PYTHON" -B - <<'PY'
+          import os, sys, tempfile
+          from pathlib import Path
+          root = Path.cwd()
+          sys.path.insert(0, str(root / 'tools'))
+          from build_release import build
+          with tempfile.TemporaryDirectory(dir=os.environ['RUNNER_TEMP']) as tmp:
+              a_path = str(Path(tmp) / 'a.tar.gz')
+              b_path = str(Path(tmp) / 'b.tar.gz')
+              meta_a = build(str(root), os.environ['EXPECTED_SHA'], a_path)
+              meta_b = build(str(root), os.environ['EXPECTED_SHA'], b_path)
+              if meta_a != meta_b:
+                  raise SystemExit('build metadata differs between identical builds')
+              if Path(a_path).read_bytes() != Path(b_path).read_bytes():
+                  raise SystemExit('archive bytes differ between identical builds')
+              print('archive_sha256=%s files=%d'
+                    % (meta_a['archive_sha256'], len(meta_a['files'])))
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+                  summary.write('- Deterministic build: `archive_sha256=%s`, %d files\n'
+                                % (meta_a['archive_sha256'], len(meta_a['files'])))
+          PY
+      - name: Clean up owned temp venv
+        if: always() && env.CI_VENV != ''
+        run: |
+          set -euo pipefail
+          [[ "$CI_VENV" == "$RUNNER_TEMP"/ci-venv.* ]] || { echo '::error::Refusing to remove unowned path'; exit 1; }
+          rm -rf -- "$CI_VENV"

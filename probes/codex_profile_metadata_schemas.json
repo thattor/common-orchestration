@@ -1,0 +1,3624 @@
+{
+  "native_source": "ff6aec96948b70d94983af2641a6b67c94faeff5",
+  "cli": "0.159.2",
+  "sources": {
+    "thread/started": {
+      "schema": "ThreadStartedNotification.json",
+      "installed_schema_sha256": "f4c4acf11b4a71d72c19678583df1b5639561434b5156b12657951cda25cf0d1"
+    },
+    "thread/status/changed": {
+      "schema": "ThreadStatusChangedNotification.json",
+      "installed_schema_sha256": "26f3c60c1b73f7fa2d31c74429cdc36f8746c76c33e3d314b3fb61d3661f05f6"
+    },
+    "account/rateLimits/updated": {
+      "schema": "AccountRateLimitsUpdatedNotification.json",
+      "installed_schema_sha256": "37326ef0364007be0c8f92bf5cd228941b513f87266edd566d694409b5aa5b8b"
+    },
+    "account/updated": {
+      "schema": "AccountUpdatedNotification.json",
+      "installed_schema_sha256": "268dba6977cc3adcced751a97367772a1e201a199c14f454741d851fe8bbacb1"
+    },
+    "item/reasoning/summaryTextDelta": {
+      "schema": "ReasoningSummaryTextDeltaNotification.json",
+      "installed_schema_sha256": "895bdca00b4674634c25a5c4d1f82e55e65767d81ddcac4bb7b00aa3d438e62f"
+    },
+    "item/reasoning/summaryPartAdded": {
+      "schema": "ReasoningSummaryPartAddedNotification.json",
+      "installed_schema_sha256": "c8dfcb82d773d0f5d297ae1a47749e2b719013e82030a3af5d4550f9feb8eed6"
+    },
+    "item/reasoning/textDelta": {
+      "schema": "ReasoningTextDeltaNotification.json",
+      "installed_schema_sha256": "16cdc13080a7523b44f00fb6fdb660c56a7c4c8cda96b2f9b87b7e72264170fb"
+    },
+    "item/started": {
+      "schema": "ItemStartedNotification.json",
+      "installed_schema_sha256": "7574788d2a352747f50d44be3ef649011cb8de8069da4c655faff14d0aee32c4"
+    },
+    "item/completed": {
+      "schema": "ItemCompletedNotification.json",
+      "installed_schema_sha256": "d04b9153de38cd8302a2a418a44a65e8265d4c7586d46ea2cc801b594c6acf5b"
+    },
+    "turn/started": {
+      "schema": "TurnStartedNotification.json",
+      "installed_schema_sha256": "2e9a109ee549c1e266223304c9e0580075cda03feb65473363b124f18e9a3769"
+    },
+    "turn/completed": {
+      "schema": "TurnCompletedNotification.json",
+      "installed_schema_sha256": "016870158603b0f84bd9f8f65f927161c9fd5128e5ec632087616462dc44e085"
+    },
+    "item/agentMessage/delta": {
+      "schema": "AgentMessageDeltaNotification.json",
+      "installed_schema_sha256": "996e6c0ea65e57bed5a00f410b94381fe5ebf804333e5d00c2b6e6d47e5c55f6"
+    },
+    "thread/tokenUsage/updated": {
+      "schema": "ThreadTokenUsageUpdatedNotification.json",
+      "installed_schema_sha256": "aba4f6c7e4a19b2b842c08ee793b57000c07dafd57b922ad0d8e7c76609108c2"
+    }
+  },
+  "schemas": {
+    "thread/started": {
+      "properties": {
+        "thread": {
+          "$ref": "#/definitions/Thread"
+        }
+      },
+      "required": [
+        "thread"
+      ],
+      "type": "object",
+      "definitions": {
+        "AbsolutePathBuf": {
+          "type": "string"
+        },
+        "AgentPath": {
+          "type": "string"
+        },
+        "GitInfo": {
+          "properties": {
+            "branch": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "originUrl": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sha": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "LegacyAppPathString": {
+          "type": "string"
+        },
+        "ReasoningEffort": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "SessionSource": {
+          "oneOf": [
+            {
+              "enum": [
+                "cli",
+                "vscode",
+                "exec",
+                "appServer",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "custom": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "custom"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "subAgent": {
+                  "$ref": "#/definitions/SubAgentSource"
+                }
+              },
+              "required": [
+                "subAgent"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "SubAgentSource": {
+          "oneOf": [
+            {
+              "enum": [
+                "review",
+                "compact",
+                "memory_consolidation"
+              ],
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "thread_spawn": {
+                  "properties": {
+                    "agent_nickname": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "agent_path": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/definitions/AgentPath"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "agent_role": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "depth": {
+                      "type": "integer"
+                    },
+                    "parent_thread_id": {
+                      "$ref": "#/definitions/ThreadId"
+                    }
+                  },
+                  "required": [
+                    "depth",
+                    "parent_thread_id"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "thread_spawn"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "other": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "other"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "Thread": {
+          "properties": {
+            "agentNickname": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "agentRole": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "canAcceptDirectInput": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "cliVersion": {
+              "type": "string"
+            },
+            "createdAt": {
+              "type": "integer"
+            },
+            "cwd": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/AbsolutePathBuf"
+                }
+              ]
+            },
+            "daybreakEnabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "environments": {
+              "items": {
+                "$ref": "#/definitions/ThreadEnvironment"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "ephemeral": {
+              "type": "boolean"
+            },
+            "extra": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ThreadExtra"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "forkedFromId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "gitInfo": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GitInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "historyMode": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ThreadHistoryMode"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "model": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "modelProvider": {
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "originator": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "parentThreadId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "preview": {
+              "type": "string"
+            },
+            "projectId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reasoningEffort": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ReasoningEffort"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "recencyAt": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "section": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ThreadSection"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "sectionEnteredAt": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "source": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/SessionSource"
+                }
+              ]
+            },
+            "status": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ThreadStatus"
+                }
+              ]
+            },
+            "threadSource": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ThreadSource"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "turns": {
+              "type": "array",
+              "maxItems": 0
+            },
+            "updatedAt": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "cliVersion",
+            "createdAt",
+            "cwd",
+            "ephemeral",
+            "id",
+            "modelProvider",
+            "preview",
+            "projectId",
+            "sessionId",
+            "source",
+            "status",
+            "turns",
+            "updatedAt"
+          ],
+          "type": "object"
+        },
+        "ThreadActiveFlag": {
+          "enum": [
+            "waitingOnApproval",
+            "waitingOnUserInput"
+          ],
+          "type": "string"
+        },
+        "ThreadEnvironment": {
+          "properties": {
+            "cwd": {
+              "$ref": "#/definitions/LegacyAppPathString"
+            },
+            "environmentId": {
+              "type": "string"
+            },
+            "runtimeWorkspaceRoots": {
+              "items": {
+                "$ref": "#/definitions/LegacyAppPathString"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "cwd",
+            "environmentId",
+            "runtimeWorkspaceRoots"
+          ],
+          "type": "object"
+        },
+        "ThreadExtra": {
+          "type": "object"
+        },
+        "ThreadHistoryMode": {
+          "enum": [
+            "legacy",
+            "paginated"
+          ],
+          "type": "string"
+        },
+        "ThreadId": {
+          "type": "string"
+        },
+        "ThreadSection": {
+          "properties": {
+            "appearance": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ThreadSectionAppearance"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name"
+          ],
+          "type": "object"
+        },
+        "ThreadSectionAppearance": {
+          "properties": {
+            "color": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "icon": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "ThreadSource": {
+          "type": "string"
+        },
+        "ThreadStatus": {
+          "oneOf": [
+            {
+              "properties": {
+                "type": {
+                  "enum": [
+                    "notLoaded"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "enum": [
+                    "idle"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "enum": [
+                    "systemError"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "activeFlags": {
+                  "items": {
+                    "$ref": "#/definitions/ThreadActiveFlag"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "enum": [
+                    "active"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "activeFlags",
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      }
+    },
+    "thread/status/changed": {
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/ThreadStatus"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "threadId"
+      ],
+      "type": "object",
+      "definitions": {
+        "ThreadActiveFlag": {
+          "enum": [
+            "waitingOnApproval",
+            "waitingOnUserInput"
+          ],
+          "type": "string"
+        },
+        "ThreadStatus": {
+          "oneOf": [
+            {
+              "properties": {
+                "type": {
+                  "enum": [
+                    "notLoaded"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "enum": [
+                    "idle"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "enum": [
+                    "systemError"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "activeFlags": {
+                  "items": {
+                    "$ref": "#/definitions/ThreadActiveFlag"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "enum": [
+                    "active"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "activeFlags",
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      }
+    },
+    "account/rateLimits/updated": {
+      "properties": {
+        "rateLimits": {
+          "$ref": "#/definitions/RateLimitSnapshot"
+        }
+      },
+      "required": [
+        "rateLimits"
+      ],
+      "type": "object",
+      "definitions": {
+        "CreditsSnapshot": {
+          "properties": {
+            "balance": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "hasCredits": {
+              "type": "boolean"
+            },
+            "unlimited": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "hasCredits",
+            "unlimited"
+          ],
+          "type": "object"
+        },
+        "PlanType": {
+          "enum": [
+            "free",
+            "go",
+            "plus",
+            "pro",
+            "prolite",
+            "promax",
+            "team",
+            "self_serve_business_prolite",
+            "self_serve_business_usage_based",
+            "business",
+            "ent26",
+            "enterprise_cbp_automation",
+            "enterprise_cbp_usage_based",
+            "enterprise",
+            "edu",
+            "edu_plus",
+            "edu_pro",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "RateLimitReachedType": {
+          "enum": [
+            "rate_limit_reached",
+            "workspace_owner_credits_depleted",
+            "workspace_member_credits_depleted",
+            "workspace_owner_usage_limit_reached",
+            "workspace_member_usage_limit_reached"
+          ],
+          "type": "string"
+        },
+        "RateLimitSnapshot": {
+          "properties": {
+            "credits": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/CreditsSnapshot"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "individualLimit": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SpendControlLimitSnapshot"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "limitId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "limitName": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "normalModelSlug": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "planType": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PlanType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "primary": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/RateLimitWindow"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "rateLimitReachedType": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/RateLimitReachedType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "secondary": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/RateLimitWindow"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "spendControlReached": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "RateLimitWindow": {
+          "properties": {
+            "resetsAt": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "usedPercent": {
+              "type": "integer"
+            },
+            "windowDurationMins": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "usedPercent"
+          ],
+          "type": "object"
+        },
+        "SpendControlLimitSnapshot": {
+          "properties": {
+            "limit": {
+              "type": "string"
+            },
+            "remainingPercent": {
+              "type": "integer"
+            },
+            "resetsAt": {
+              "type": "integer"
+            },
+            "used": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "limit",
+            "remainingPercent",
+            "resetsAt",
+            "used"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    "account/updated": {
+      "properties": {
+        "authMode": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AuthMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "planType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PlanType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object",
+      "definitions": {
+        "AuthMode": {
+          "oneOf": [
+            {
+              "enum": [
+                "apikey"
+              ],
+              "type": "string"
+            },
+            {
+              "enum": [
+                "chatgpt"
+              ],
+              "type": "string"
+            },
+            {
+              "enum": [
+                "chatgptAuthTokens"
+              ],
+              "type": "string"
+            },
+            {
+              "enum": [
+                "headers"
+              ],
+              "type": "string"
+            },
+            {
+              "enum": [
+                "agentIdentity"
+              ],
+              "type": "string"
+            },
+            {
+              "enum": [
+                "personalAccessToken"
+              ],
+              "type": "string"
+            },
+            {
+              "enum": [
+                "bedrockApiKey"
+              ],
+              "type": "string"
+            },
+            {
+              "enum": [
+                "bedrockAccessKeys"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "PlanType": {
+          "enum": [
+            "free",
+            "go",
+            "plus",
+            "pro",
+            "prolite",
+            "promax",
+            "team",
+            "self_serve_business_prolite",
+            "self_serve_business_usage_based",
+            "business",
+            "ent26",
+            "enterprise_cbp_automation",
+            "enterprise_cbp_usage_based",
+            "enterprise",
+            "edu",
+            "edu_plus",
+            "edu_pro",
+            "unknown"
+          ],
+          "type": "string"
+        }
+      }
+    },
+    "item/reasoning/summaryTextDelta": {
+      "properties": {
+        "delta": {
+          "type": "string"
+        },
+        "itemId": {
+          "type": "string"
+        },
+        "summaryIndex": {
+          "type": "integer"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "delta",
+        "itemId",
+        "summaryIndex",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object",
+      "definitions": {}
+    },
+    "item/reasoning/summaryPartAdded": {
+      "properties": {
+        "itemId": {
+          "type": "string"
+        },
+        "summaryIndex": {
+          "type": "integer"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "itemId",
+        "summaryIndex",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object",
+      "definitions": {}
+    },
+    "item/reasoning/textDelta": {
+      "properties": {
+        "contentIndex": {
+          "type": "integer"
+        },
+        "delta": {
+          "type": "string"
+        },
+        "itemId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "contentIndex",
+        "delta",
+        "itemId",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object",
+      "definitions": {}
+    },
+    "item/started": {
+      "properties": {
+        "item": {
+          "$ref": "#/definitions/ThreadItem"
+        },
+        "startedAtMs": {
+          "type": "integer"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "item",
+        "startedAtMs",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object",
+      "definitions": {
+        "AgentMessageDelivery": {
+          "enum": [
+            "async"
+          ],
+          "type": "string"
+        },
+        "AsyncUserInputQuestion": {
+          "additionalProperties": false,
+          "properties": {
+            "options": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "title"
+          ],
+          "type": "object"
+        },
+        "ByteRange": {
+          "properties": {
+            "end": {
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "start": {
+              "minimum": 0.0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "end",
+            "start"
+          ],
+          "type": "object"
+        },
+        "ImageDetail": {
+          "enum": [
+            "auto",
+            "low",
+            "high",
+            "original"
+          ],
+          "type": "string"
+        },
+        "MemoryCitation": {
+          "properties": {
+            "entries": {
+              "items": {
+                "$ref": "#/definitions/MemoryCitationEntry"
+              },
+              "type": "array"
+            },
+            "threadIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "entries",
+            "threadIds"
+          ],
+          "type": "object"
+        },
+        "MemoryCitationEntry": {
+          "properties": {
+            "lineEnd": {
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "lineStart": {
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "note": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "lineEnd",
+            "lineStart",
+            "note",
+            "path"
+          ],
+          "type": "object"
+        },
+        "MessagePhase": {
+          "oneOf": [
+            {
+              "enum": [
+                "commentary"
+              ],
+              "type": "string"
+            },
+            {
+              "enum": [
+                "final_answer"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "TextElement": {
+          "properties": {
+            "byteRange": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ByteRange"
+                }
+              ]
+            },
+            "placeholder": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "byteRange"
+          ],
+          "type": "object"
+        },
+        "ThreadItem": {
+          "oneOf": [
+            {
+              "properties": {
+                "clientId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "content": {
+                  "items": {
+                    "$ref": "#/definitions/UserInput"
+                  },
+                  "type": "array"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "userMessage"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "id",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "delivery": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/AgentMessageDelivery"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "memoryCitation": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/MemoryCitation"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "phase": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/MessagePhase"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "questions": {
+                  "items": {
+                    "$ref": "#/definitions/AsyncUserInputQuestion"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "text": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "agentMessage"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "text",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "content": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "summary": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "enum": [
+                    "reasoning"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "UserInput": {
+          "oneOf": [
+            {
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "text_elements": {
+                  "items": {
+                    "$ref": "#/definitions/TextElement"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "enum": [
+                    "text"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "anyOf": [
+                {
+                  "properties": {
+                    "url": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "url"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "fileId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "fileId"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "properties": {
+                "detail": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/ImageDetail"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": {
+                  "enum": [
+                    "image"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "detail": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/ImageDetail"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "path": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "localImage"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "enum": [
+                    "audio"
+                  ],
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "url"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "localAudio"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "skill"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "path",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "mention"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "path",
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      }
+    },
+    "item/completed": {
+      "properties": {
+        "completedAtMs": {
+          "type": "integer"
+        },
+        "item": {
+          "$ref": "#/definitions/ThreadItem"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "completedAtMs",
+        "item",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object",
+      "definitions": {
+        "AgentMessageDelivery": {
+          "enum": [
+            "async"
+          ],
+          "type": "string"
+        },
+        "AsyncUserInputQuestion": {
+          "additionalProperties": false,
+          "properties": {
+            "options": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "title"
+          ],
+          "type": "object"
+        },
+        "ByteRange": {
+          "properties": {
+            "end": {
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "start": {
+              "minimum": 0.0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "end",
+            "start"
+          ],
+          "type": "object"
+        },
+        "ImageDetail": {
+          "enum": [
+            "auto",
+            "low",
+            "high",
+            "original"
+          ],
+          "type": "string"
+        },
+        "MemoryCitation": {
+          "properties": {
+            "entries": {
+              "items": {
+                "$ref": "#/definitions/MemoryCitationEntry"
+              },
+              "type": "array"
+            },
+            "threadIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "entries",
+            "threadIds"
+          ],
+          "type": "object"
+        },
+        "MemoryCitationEntry": {
+          "properties": {
+            "lineEnd": {
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "lineStart": {
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "note": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "lineEnd",
+            "lineStart",
+            "note",
+            "path"
+          ],
+          "type": "object"
+        },
+        "MessagePhase": {
+          "oneOf": [
+            {
+              "enum": [
+                "commentary"
+              ],
+              "type": "string"
+            },
+            {
+              "enum": [
+                "final_answer"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "TextElement": {
+          "properties": {
+            "byteRange": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ByteRange"
+                }
+              ]
+            },
+            "placeholder": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "byteRange"
+          ],
+          "type": "object"
+        },
+        "ThreadItem": {
+          "oneOf": [
+            {
+              "properties": {
+                "clientId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "content": {
+                  "items": {
+                    "$ref": "#/definitions/UserInput"
+                  },
+                  "type": "array"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "userMessage"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "id",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "delivery": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/AgentMessageDelivery"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "memoryCitation": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/MemoryCitation"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "phase": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/MessagePhase"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "questions": {
+                  "items": {
+                    "$ref": "#/definitions/AsyncUserInputQuestion"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "text": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "agentMessage"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "text",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "content": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "summary": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "enum": [
+                    "reasoning"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "UserInput": {
+          "oneOf": [
+            {
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "text_elements": {
+                  "items": {
+                    "$ref": "#/definitions/TextElement"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "enum": [
+                    "text"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "anyOf": [
+                {
+                  "properties": {
+                    "url": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "url"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "fileId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "fileId"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "properties": {
+                "detail": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/ImageDetail"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": {
+                  "enum": [
+                    "image"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "detail": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/ImageDetail"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "path": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "localImage"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "enum": [
+                    "audio"
+                  ],
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "url"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "localAudio"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "skill"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "path",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "mention"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "path",
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      }
+    },
+    "turn/started": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "turn": {
+          "$ref": "#/definitions/Turn"
+        }
+      },
+      "required": [
+        "threadId",
+        "turn"
+      ],
+      "type": "object",
+      "definitions": {
+        "AgentMessageDelivery": {
+          "enum": [
+            "async"
+          ],
+          "type": "string"
+        },
+        "AsyncUserInputQuestion": {
+          "additionalProperties": false,
+          "properties": {
+            "options": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "title"
+          ],
+          "type": "object"
+        },
+        "ByteRange": {
+          "properties": {
+            "end": {
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "start": {
+              "minimum": 0.0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "end",
+            "start"
+          ],
+          "type": "object"
+        },
+        "CodexErrorInfo": {
+          "oneOf": [
+            {
+              "enum": [
+                "contextWindowExceeded",
+                "sessionBudgetExceeded",
+                "usageLimitExceeded",
+                "rateLimitExceeded",
+                "flexUnavailable",
+                "serverOverloaded",
+                "cyberPolicy",
+                "misalignmentPolicyViolation",
+                "tooManyDenials",
+                "internalServerError",
+                "unauthorized",
+                "badRequest",
+                "threadRollbackFailed",
+                "sandboxError",
+                "other"
+              ],
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "httpConnectionFailed": {
+                  "properties": {
+                    "httpStatusCode": {
+                      "minimum": 0.0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "httpConnectionFailed"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "responseStreamConnectionFailed": {
+                  "properties": {
+                    "httpStatusCode": {
+                      "minimum": 0.0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "responseStreamConnectionFailed"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "responseStreamDisconnected": {
+                  "properties": {
+                    "httpStatusCode": {
+                      "minimum": 0.0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "responseStreamDisconnected"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "responseTooManyFailedAttempts": {
+                  "properties": {
+                    "httpStatusCode": {
+                      "minimum": 0.0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "responseTooManyFailedAttempts"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "activeTurnNotSteerable": {
+                  "properties": {
+                    "turnKind": {
+                      "$ref": "#/definitions/NonSteerableTurnKind"
+                    }
+                  },
+                  "required": [
+                    "turnKind"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "activeTurnNotSteerable"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "ImageDetail": {
+          "enum": [
+            "auto",
+            "low",
+            "high",
+            "original"
+          ],
+          "type": "string"
+        },
+        "MemoryCitation": {
+          "properties": {
+            "entries": {
+              "items": {
+                "$ref": "#/definitions/MemoryCitationEntry"
+              },
+              "type": "array"
+            },
+            "threadIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "entries",
+            "threadIds"
+          ],
+          "type": "object"
+        },
+        "MemoryCitationEntry": {
+          "properties": {
+            "lineEnd": {
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "lineStart": {
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "note": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "lineEnd",
+            "lineStart",
+            "note",
+            "path"
+          ],
+          "type": "object"
+        },
+        "MessagePhase": {
+          "oneOf": [
+            {
+              "enum": [
+                "commentary"
+              ],
+              "type": "string"
+            },
+            {
+              "enum": [
+                "final_answer"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "MisalignmentErrorDetails": {
+          "properties": {
+            "detailedExplanation": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "errorType": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "steer": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MisalignmentSteer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "MisalignmentSteer": {
+          "properties": {
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "message"
+          ],
+          "type": "object"
+        },
+        "NonSteerableTurnKind": {
+          "enum": [
+            "review",
+            "compact"
+          ],
+          "type": "string"
+        },
+        "TextElement": {
+          "properties": {
+            "byteRange": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ByteRange"
+                }
+              ]
+            },
+            "placeholder": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "byteRange"
+          ],
+          "type": "object"
+        },
+        "ThreadItem": {
+          "oneOf": [
+            {
+              "properties": {
+                "clientId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "content": {
+                  "items": {
+                    "$ref": "#/definitions/UserInput"
+                  },
+                  "type": "array"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "userMessage"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "id",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "delivery": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/AgentMessageDelivery"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "memoryCitation": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/MemoryCitation"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "phase": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/MessagePhase"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "questions": {
+                  "items": {
+                    "$ref": "#/definitions/AsyncUserInputQuestion"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "text": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "agentMessage"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "text",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "content": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "summary": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "enum": [
+                    "reasoning"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "Turn": {
+          "properties": {
+            "completedAt": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "durationMs": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TurnError"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/definitions/ThreadItem"
+              },
+              "type": "array"
+            },
+            "itemsView": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/TurnItemsView"
+                }
+              ]
+            },
+            "startedAt": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "status": {
+              "$ref": "#/definitions/TurnStatus"
+            }
+          },
+          "required": [
+            "id",
+            "items",
+            "status"
+          ],
+          "type": "object"
+        },
+        "TurnError": {
+          "properties": {
+            "additionalDetails": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "codexErrorInfo": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/CodexErrorInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "message": {
+              "type": "string"
+            },
+            "misalignment": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MisalignmentErrorDetails"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "message"
+          ],
+          "type": "object"
+        },
+        "TurnItemsView": {
+          "oneOf": [
+            {
+              "enum": [
+                "notLoaded"
+              ],
+              "type": "string"
+            },
+            {
+              "enum": [
+                "summary"
+              ],
+              "type": "string"
+            },
+            {
+              "enum": [
+                "full"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "TurnStatus": {
+          "enum": [
+            "completed",
+            "interrupted",
+            "failed",
+            "inProgress"
+          ],
+          "type": "string"
+        },
+        "UserInput": {
+          "oneOf": [
+            {
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "text_elements": {
+                  "items": {
+                    "$ref": "#/definitions/TextElement"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "enum": [
+                    "text"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "anyOf": [
+                {
+                  "properties": {
+                    "url": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "url"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "fileId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "fileId"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "properties": {
+                "detail": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/ImageDetail"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": {
+                  "enum": [
+                    "image"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "detail": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/ImageDetail"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "path": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "localImage"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "enum": [
+                    "audio"
+                  ],
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "url"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "localAudio"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "skill"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "path",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "mention"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "path",
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      }
+    },
+    "turn/completed": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "turn": {
+          "$ref": "#/definitions/Turn"
+        }
+      },
+      "required": [
+        "threadId",
+        "turn"
+      ],
+      "type": "object",
+      "definitions": {
+        "AgentMessageDelivery": {
+          "enum": [
+            "async"
+          ],
+          "type": "string"
+        },
+        "AsyncUserInputQuestion": {
+          "additionalProperties": false,
+          "properties": {
+            "options": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "title"
+          ],
+          "type": "object"
+        },
+        "ByteRange": {
+          "properties": {
+            "end": {
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "start": {
+              "minimum": 0.0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "end",
+            "start"
+          ],
+          "type": "object"
+        },
+        "CodexErrorInfo": {
+          "oneOf": [
+            {
+              "enum": [
+                "contextWindowExceeded",
+                "sessionBudgetExceeded",
+                "usageLimitExceeded",
+                "rateLimitExceeded",
+                "flexUnavailable",
+                "serverOverloaded",
+                "cyberPolicy",
+                "misalignmentPolicyViolation",
+                "tooManyDenials",
+                "internalServerError",
+                "unauthorized",
+                "badRequest",
+                "threadRollbackFailed",
+                "sandboxError",
+                "other"
+              ],
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "httpConnectionFailed": {
+                  "properties": {
+                    "httpStatusCode": {
+                      "minimum": 0.0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "httpConnectionFailed"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "responseStreamConnectionFailed": {
+                  "properties": {
+                    "httpStatusCode": {
+                      "minimum": 0.0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "responseStreamConnectionFailed"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "responseStreamDisconnected": {
+                  "properties": {
+                    "httpStatusCode": {
+                      "minimum": 0.0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "responseStreamDisconnected"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "responseTooManyFailedAttempts": {
+                  "properties": {
+                    "httpStatusCode": {
+                      "minimum": 0.0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "responseTooManyFailedAttempts"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "activeTurnNotSteerable": {
+                  "properties": {
+                    "turnKind": {
+                      "$ref": "#/definitions/NonSteerableTurnKind"
+                    }
+                  },
+                  "required": [
+                    "turnKind"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "activeTurnNotSteerable"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "ImageDetail": {
+          "enum": [
+            "auto",
+            "low",
+            "high",
+            "original"
+          ],
+          "type": "string"
+        },
+        "MemoryCitation": {
+          "properties": {
+            "entries": {
+              "items": {
+                "$ref": "#/definitions/MemoryCitationEntry"
+              },
+              "type": "array"
+            },
+            "threadIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "entries",
+            "threadIds"
+          ],
+          "type": "object"
+        },
+        "MemoryCitationEntry": {
+          "properties": {
+            "lineEnd": {
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "lineStart": {
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "note": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "lineEnd",
+            "lineStart",
+            "note",
+            "path"
+          ],
+          "type": "object"
+        },
+        "MessagePhase": {
+          "oneOf": [
+            {
+              "enum": [
+                "commentary"
+              ],
+              "type": "string"
+            },
+            {
+              "enum": [
+                "final_answer"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "MisalignmentErrorDetails": {
+          "properties": {
+            "detailedExplanation": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "errorType": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "steer": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MisalignmentSteer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "MisalignmentSteer": {
+          "properties": {
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "message"
+          ],
+          "type": "object"
+        },
+        "NonSteerableTurnKind": {
+          "enum": [
+            "review",
+            "compact"
+          ],
+          "type": "string"
+        },
+        "TextElement": {
+          "properties": {
+            "byteRange": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ByteRange"
+                }
+              ]
+            },
+            "placeholder": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "byteRange"
+          ],
+          "type": "object"
+        },
+        "ThreadItem": {
+          "oneOf": [
+            {
+              "properties": {
+                "clientId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "content": {
+                  "items": {
+                    "$ref": "#/definitions/UserInput"
+                  },
+                  "type": "array"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "userMessage"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "id",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "delivery": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/AgentMessageDelivery"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "memoryCitation": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/MemoryCitation"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "phase": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/MessagePhase"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "questions": {
+                  "items": {
+                    "$ref": "#/definitions/AsyncUserInputQuestion"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "text": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "agentMessage"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "text",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "content": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "summary": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "enum": [
+                    "reasoning"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "Turn": {
+          "properties": {
+            "completedAt": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "durationMs": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TurnError"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/definitions/ThreadItem"
+              },
+              "type": "array"
+            },
+            "itemsView": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/TurnItemsView"
+                }
+              ]
+            },
+            "startedAt": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "status": {
+              "$ref": "#/definitions/TurnStatus"
+            }
+          },
+          "required": [
+            "id",
+            "items",
+            "status"
+          ],
+          "type": "object"
+        },
+        "TurnError": {
+          "properties": {
+            "additionalDetails": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "codexErrorInfo": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/CodexErrorInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "message": {
+              "type": "string"
+            },
+            "misalignment": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MisalignmentErrorDetails"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "message"
+          ],
+          "type": "object"
+        },
+        "TurnItemsView": {
+          "oneOf": [
+            {
+              "enum": [
+                "notLoaded"
+              ],
+              "type": "string"
+            },
+            {
+              "enum": [
+                "summary"
+              ],
+              "type": "string"
+            },
+            {
+              "enum": [
+                "full"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "TurnStatus": {
+          "enum": [
+            "completed",
+            "interrupted",
+            "failed",
+            "inProgress"
+          ],
+          "type": "string"
+        },
+        "UserInput": {
+          "oneOf": [
+            {
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "text_elements": {
+                  "items": {
+                    "$ref": "#/definitions/TextElement"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "enum": [
+                    "text"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "anyOf": [
+                {
+                  "properties": {
+                    "url": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "url"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "fileId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "fileId"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "properties": {
+                "detail": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/ImageDetail"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": {
+                  "enum": [
+                    "image"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "detail": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/ImageDetail"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "path": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "localImage"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "enum": [
+                    "audio"
+                  ],
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "url"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "localAudio"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "skill"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "path",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "mention"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "path",
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      }
+    },
+    "item/agentMessage/delta": {
+      "properties": {
+        "delta": {
+          "type": "string"
+        },
+        "itemId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "delta",
+        "itemId",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object",
+      "definitions": {}
+    },
+    "thread/tokenUsage/updated": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "tokenUsage": {
+          "$ref": "#/definitions/ThreadTokenUsage"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId",
+        "tokenUsage",
+        "turnId"
+      ],
+      "type": "object",
+      "definitions": {
+        "ThreadTokenUsage": {
+          "properties": {
+            "last": {
+              "$ref": "#/definitions/TokenUsageBreakdown"
+            },
+            "modelContextWindow": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "total": {
+              "$ref": "#/definitions/TokenUsageBreakdown"
+            }
+          },
+          "required": [
+            "last",
+            "total"
+          ],
+          "type": "object"
+        },
+        "TokenUsageBreakdown": {
+          "properties": {
+            "cacheWriteInputTokens": {
+              "type": "integer"
+            },
+            "cachedInputTokens": {
+              "type": "integer"
+            },
+            "inputTokens": {
+              "type": "integer"
+            },
+            "outputTokens": {
+              "type": "integer"
+            },
+            "reasoningOutputTokens": {
+              "type": "integer"
+            },
+            "totalTokens": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "cachedInputTokens",
+            "inputTokens",
+            "outputTokens",
+            "reasoningOutputTokens",
+            "totalTokens"
+          ],
+          "type": "object"
+        }
+      }
+    }
+  },
+  "route_restrictions": [
+    "thread/started.turns must be empty",
+    "ThreadItem union limited to userMessage/agentMessage/reasoning; all other activities refuse",
+    "unknown object properties refuse"
+  ]
+}

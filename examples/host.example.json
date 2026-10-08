@@ -1,0 +1,70 @@
+{
+  "schema": "co.service-host/1",
+  "state_root": "/ABSOLUTE/CANONICAL/state",
+  "ledger_path": "/ABSOLUTE/CANONICAL/state/capacity.sqlite",
+  "bind": {"host": "127.0.0.1", "port": 8643},
+  "principals_file": "/ABSOLUTE/CANONICAL/principals.json",
+  "registry_file": "/ABSOLUTE/CANONICAL/registry.json",
+  "max_body_bytes": 65536,
+  "sync_wait_s": 30,
+  "routes": [
+    {
+      "model": "co04-qwen3-06b",
+      "adapter": "openai.responses",
+      "endpoint": "http://127.0.0.1:50353/v1",
+      "auth_ref": "prov-key",
+      "credential_file": "/ABSOLUTE/CANONICAL/credentials/provider.key",
+      "manifest_file": "/ABSOLUTE/CANONICAL/manifests/provider-manifest.json",
+      "launch_record": "/ABSOLUTE/CANONICAL/manifests/launch-record.json",
+      "profile": {
+        "protocol": "responses",
+        "index_mode": "absent_single_part",
+        "sequence_mode": "absent",
+        "inert_fields": {"response.completed": ["timings"]}
+      },
+      "profile_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "environment_ref": "env:sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "store_param": "send_false",
+      "deadlines": {"connect_s": 10, "first_byte_s": 30, "idle_s": 30,
+                    "total_s": 120},
+      "max_drain_s": 30,
+      "verification": {
+        "use_case": "general",
+        "official_ref": "GENERATE-AT-QUALIFICATION",
+        "implementation_ref": "GENERATE-AT-QUALIFICATION",
+        "measurement_ref": "GENERATE-AT-QUALIFICATION",
+        "ac_ref": "GENERATE-AT-QUALIFICATION",
+        "output_mode": "collect"
+      }
+    },
+    {
+      "model": "co04-qwen3-06b",
+      "adapter": "openai.chat",
+      "endpoint": "http://127.0.0.1:50353/v1",
+      "auth_ref": "prov-key",
+      "credential_file": "/ABSOLUTE/CANONICAL/credentials/provider.key",
+      "manifest_file": "/ABSOLUTE/CANONICAL/manifests/provider-manifest.json",
+      "launch_record": "/ABSOLUTE/CANONICAL/manifests/launch-record.json",
+      "profile": {
+        "protocol": "chat",
+        "index_mode": "present",
+        "sequence_mode": "present",
+        "inert_fields": {}
+      },
+      "profile_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "environment_ref": "env:sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "store_param": "send_false",
+      "deadlines": {"connect_s": 10, "first_byte_s": 30, "idle_s": 30,
+                    "total_s": 120},
+      "max_drain_s": 30,
+      "verification": {
+        "use_case": "general",
+        "official_ref": "GENERATE-AT-QUALIFICATION",
+        "implementation_ref": "GENERATE-AT-QUALIFICATION",
+        "measurement_ref": "GENERATE-AT-QUALIFICATION",
+        "ac_ref": "GENERATE-AT-QUALIFICATION",
+        "output_mode": "collect"
+      }
+    }
+  ]
+}

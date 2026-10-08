@@ -1,0 +1,13 @@
+{
+  "evidence_kind": "synthetic_fixture",
+  "ref": {"run_id": "run-fixture", "job_id": "job-1", "attempt_id": "attempt-1"},
+  "action": "filesystem.write",
+  "scope": {
+    "repository": "fixture://repo",
+    "branch": "topic",
+    "path": "/fixture/output.txt",
+    "content_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "request_ids": ["confirmation-1", "confirmation-2"],
+  "native_source": "fixture.native"
+}

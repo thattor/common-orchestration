@@ -1,0 +1,11 @@
+{
+  "hook_event_name": "PreToolUse",
+  "tool_name": "edit",
+  "tool_input": {
+    "file_path": "/fixture/repo/AGENTS.md",
+    "old_string": "alpha",
+    "new_string": "beta"
+  },
+  "session_id": "fixture-session-0000",
+  "prompt_id": "fixture-prompt-0000"
+}

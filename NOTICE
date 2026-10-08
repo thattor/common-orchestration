@@ -1,0 +1,11 @@
+Common Orchestration
+Copyright (c) 2026 thattor
+
+Licensor: thattor (https://github.com/thattor).
+This software is provided under Sustainable Use License 1.0 in LICENSE.md.
+No registration, usage reporting, or modified-source disclosure is added.
+
+Third-party template derivation text retains its upstream provenance and
+Apache-2.0 license in examples/templates/PROVENANCE and
+examples/templates/LICENSE-Apache-2.0. No upstream model or template payload
+is included. Those notices are not a blanket license for the CO code.
