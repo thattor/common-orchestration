@@ -9,6 +9,8 @@ from the real gateway.project(). No fabricated AC/completion/NeverStarted.
 """
 from hashlib import sha256
 from pathlib import Path
+from unittest import mock
+import errno
 import http.client
 import json
 import secrets
@@ -133,7 +135,13 @@ class HttpServiceTests(unittest.TestCase):
                                         timeout=10)
         try:
             sock.sendall(request)
-            sock.shutdown(socket.SHUT_WR)
+            try:
+                sock.shutdown(socket.SHUT_WR)
+            except OSError as exc:
+                # Truncated bodies need EOF; a peer may already have closed
+                # after queuing its response. Other shutdown errors stay fatal.
+                if exc.errno != errno.ENOTCONN:
+                    raise
             out = b''
             while True:
                 chunk = sock.recv(65536)
@@ -458,6 +466,48 @@ class HttpServiceTests(unittest.TestCase):
         status, _, blob = self.raw(
             self.post('/v1/responses', auth, over), port)
         self.assertEqual((status, blob), (413, envelope(413)))
+
+
+class RawHelperTests(unittest.TestCase):
+    """raw() half-close edge cases: mock socket, no listener/SDK."""
+
+    @staticmethod
+    def _raw(sock):
+        with mock.patch.object(socket, 'create_connection',
+                               return_value=sock):
+            return HttpServiceTests.raw(mock.Mock(port=1), b'req')
+
+    def test_enotconn_still_reads_queued_response(self):
+        blob = envelope(503)
+        response = (b'HTTP/1.1 503 Service Unavailable\r\n'
+                    b'Content-Length: ' + str(len(blob)).encode('ascii')
+                    + b'\r\n\r\n' + blob)
+        sock = mock.Mock()
+        sock.recv.side_effect = [response, b'']
+        sock.shutdown.side_effect = OSError(errno.ENOTCONN,
+                                            'Socket is not connected')
+        status, head, body = self._raw(sock)
+        self.assertTrue(head.startswith(b'HTTP/1.1 503'))
+        self.assertEqual((status, body), (503, blob))
+        sock.close.assert_called_once_with()
+
+    def test_other_shutdown_oserror_propagates(self):
+        sock = mock.Mock()
+        sock.shutdown.side_effect = OSError(errno.EPIPE, 'Broken pipe')
+        with self.assertRaises(OSError) as ctx:
+            self._raw(sock)
+        self.assertIs(ctx.exception, sock.shutdown.side_effect)
+        self.assertEqual(ctx.exception.errno, errno.EPIPE)
+        sock.close.assert_called_once_with()
+
+    def test_enotconn_without_response_still_fails(self):
+        sock = mock.Mock()
+        sock.recv.return_value = b''
+        sock.shutdown.side_effect = OSError(errno.ENOTCONN,
+                                            'Socket is not connected')
+        with self.assertRaises(IndexError):
+            self._raw(sock)
+        sock.close.assert_called_once_with()
 
 
 if __name__ == '__main__':
