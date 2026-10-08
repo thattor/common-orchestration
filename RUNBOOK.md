@@ -128,6 +128,8 @@ model calls. Do not silently create, overwrite, move or remeasure state to
 make a reference work. No global Skill or Plugin installation is required
 by this convention.
 
+### Choosing models and running tasks
+
 Add these options to `run` **before `--verify`**:
 
 - `--mode suitability` (default): select using the step's focus and candidate fit.
