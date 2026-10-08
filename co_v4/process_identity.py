@@ -6,8 +6,13 @@ BSD info (pid/uid/birth) is compared BEFORE proc_pidpath and the
 KERN_PROCARGS2 read, so a mismatched or dead PID is refused without
 ever touching argv. A second BSD read after the argv read proves birth
 consistency across the window: a PID-reuse race is 'mismatch', never a
-silently accepted record. The KERN_PROCARGS2 environment tail is never
-decoded, returned or logged.
+silently accepted record. The decoder stops after argc NUL-terminated
+argv strings and does not parse an environment block. KERN_PROCARGS2
+reports current argument memory: a process that rewrites argv
+terminators can splice adjacent environment bytes into decoded argv.
+Treat ProcessIdentity.argv as untrusted and potentially sensitive;
+never log it or place it in errors. Launch-record callers require
+exact qualified argv equality and reject mismatches with fixed errors.
 
 Backend is injectable for negative tests only; the real backend is a
 narrow ctypes binding over libSystem libproc/sysctl using the exact
@@ -172,7 +177,7 @@ def _decode_text(raw):
 
 
 def _decode_args(blob):
-    """argc + exec path + argv only; the environment tail is never read."""
+    """Parse argc argv strings; terminator rewrites may splice env bytes."""
     if type(blob) is not bytes:
         raise _Fail('invalid_args')
     if len(blob) < 4:

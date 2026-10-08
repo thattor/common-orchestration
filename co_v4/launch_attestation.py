@@ -7,9 +7,11 @@ time, executable path, exact argv — read through co_v4.process_identity,
 plus identity-before-hash checks of the executable, model and template
 files and the pinned closed argv allowlist (b11429). A file or a
 boolean is never
-proof: passing requires a live same-uid process started with exactly
-the qualified argv. Same-uid trust model; environment variables are
-never read or attested.
+proof: passing requires a live same-uid process whose kernel-reported
+current argv exactly equals the qualified argv. Same-uid trust model;
+environment variables are not attested. ProcessIdentity.argv can
+contain sensitive bytes if the child rewrites argument terminators;
+it must never be logged or included in errors.
 """
 import hashlib
 import json

@@ -16,22 +16,35 @@ READY_ARG = 'READY'
 UID = None                       # bound in setUpModule
 
 
+def _reap(proc):
+    for pipe in (proc.stdin, proc.stdout):
+        if pipe is None:
+            continue
+        try:
+            pipe.close()
+        except OSError:
+            pass
+    if proc.poll() is None:
+        proc.kill()
+    proc.wait()
+
+
 def spawn():
-    # /usr/bin/yes never re-execs or trampolines: proc_pidpath is exactly
-    # realpath('/usr/bin/yes'). One READY line within 5s proves exec is
-    # complete; the child loops until the owner kills it.
-    proc = subprocess.Popen(['/usr/bin/yes', READY_ARG],
+    # Apple's yes rewrites argv's terminating NUL, which can splice
+    # environment bytes into the kernel-reported argv.
+    proc = subprocess.Popen(['/bin/cat', '-u'],
                             env={'PATH': '/usr/bin:/bin'},
+                            stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE)
     try:
+        expected = READY_ARG.encode() + b'\n'
+        proc.stdin.write(expected)
+        proc.stdin.flush()
         ready, _, _ = select.select([proc.stdout], [], [], 5.0)
-        if not ready or proc.stdout.readline() != b'READY\n':
+        if not ready or proc.stdout.readline() != expected:
             raise AssertionError('owned child did not reach READY')
     except Exception:
-        if proc.poll() is None:
-            proc.kill()
-        proc.wait()
-        proc.stdout.close()
+        _reap(proc)
         raise
     return proc
 
@@ -214,18 +227,15 @@ class RealKernelTests(unittest.TestCase):
             self.assertGreater(ident.start_sec, 0)
             self.assertTrue(0 <= ident.start_usec < 1_000_000)
             self.assertEqual(ident.executable,
-                             os.path.realpath('/usr/bin/yes'))
-            self.assertEqual(ident.argv, ('/usr/bin/yes', READY_ARG))
+                             os.path.realpath('/bin/cat'))
+            self.assertEqual(ident.argv, ('/bin/cat', '-u'))
             # Recorded-birth path: identical identity, exact start match.
             again = read_owned_process(
                 proc.pid, UID,
                 expected_start=(ident.start_sec, ident.start_usec))
             self.assertEqual(again, ident)
         finally:
-            if proc.poll() is None:       # kill only a still-running child
-                proc.kill()
-            proc.wait()
-            proc.stdout.close()
+            _reap(proc)
         with self.assertRaises(ProcessIdentityRejected) as ctx:
             read_owned_process(proc.pid, UID)
         self.assertIn(ctx.exception.reason, ('dead', 'mismatch'))

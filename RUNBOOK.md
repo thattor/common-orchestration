@@ -195,7 +195,7 @@ per-file sha256 in the manifest. Any mismatch stops here.
 explicitly:
 
 ```sh
-python3 -I -c "import os, sys; sys.path.insert(0, '<EXTRACTED>/common-orchestration-v0.4.3'); import co_v4; real = os.path.realpath; assert os.path.commonpath([real(co_v4.__file__), real('<EXTRACTED>')]) == real('<EXTRACTED>')"
+python3 -I -c "import os, sys; sys.path.insert(0, '<EXTRACTED>/common-orchestration-v0.4.4'); import co_v4; real = os.path.realpath; assert os.path.commonpath([real(co_v4.__file__), real('<EXTRACTED>')]) == real('<EXTRACTED>')"
 ```
 
 For repeated use, a task-owned virtualenv may hold one `.pth` with the
