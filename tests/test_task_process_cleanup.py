@@ -33,7 +33,7 @@ def make_proc(pid=4321, wait_result=7):
 
 @contextlib.contextmanager
 def stop_env():
-    with mock.patch.object(tp.os, "waitid") as mwaitid, \
+    with mock.patch.object(tp.child_status, "waitid") as mwaitid, \
             mock.patch.object(tp.os, "killpg") as mkillpg, \
             mock.patch.object(tp.time, "monotonic") as mmono, \
             mock.patch.object(tp.time, "sleep") as msleep:

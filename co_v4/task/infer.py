@@ -34,10 +34,10 @@ import subprocess
 import tempfile
 import threading
 import time
-from contextlib import contextmanager
 from pathlib import Path
 
 from . import admission
+from . import child_status
 from . import transcript
 from .common import (TaskError, RouteFailure, _ROUTE_RECOVERABLE,
                      PrivateFileLock, canonical, digest, parse_json,
@@ -164,8 +164,8 @@ def _leader_running(proc):
     once the leader has exited or ownership has been lost (ECHILD).
     """
     try:
-        info = os.waitid(os.P_PID, proc.pid,
-                         os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        info = child_status.waitid(os.P_PID, proc.pid,
+                                   os.WEXITED | os.WNOHANG | os.WNOWAIT)
     except (ChildProcessError, OSError):
         return False
     return info is None
@@ -191,7 +191,8 @@ def _stop_group(proc):
     """
     pid = proc.pid
     try:
-        os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        child_status.waitid(os.P_PID, pid,
+                            os.WEXITED | os.WNOHANG | os.WNOWAIT)
     except (ChildProcessError, OSError):
         return False
     try:
@@ -215,28 +216,6 @@ def _stop_group(proc):
         time.sleep(0.05)
 
 
-@contextmanager
-def _defer_signals():
-    """Block SIGINT/SIGTERM/SIGHUP for a bounded cleanup, then restore.
-
-    CLI signal handlers run on the main thread; leave other callers'
-    thread-local masks alone. Where pthread_sigmask is absent (already
-    refused in _spawn), this is a pass-through. Signals arriving while blocked stay
-    pending and are delivered on restore - after group cleanup and
-    evidence commits - so a real user interrupt is never swallowed.
-    """
-    if (not hasattr(signal, 'pthread_sigmask')
-            or threading.current_thread() is not threading.main_thread()):
-        yield
-        return
-    prev = signal.pthread_sigmask(
-        signal.SIG_BLOCK, (signal.SIGINT, signal.SIGTERM, signal.SIGHUP))
-    try:
-        yield
-    finally:
-        signal.pthread_sigmask(signal.SIG_SETMASK, prev)
-
-
 def _spawn(argv, env, cwd, timeout, input_bytes=None, before_launch=None,
            *, on_stopped=None):
     """Bounded shell-free exec in its own process group.
@@ -252,14 +231,26 @@ def _spawn(argv, env, cwd, timeout, input_bytes=None, before_launch=None,
     or killpg surface are refused before Popen. on_stopped(bool) is
     invoked exactly once per successfully spawned child, after cleanup;
     a False stop proof on an otherwise clean run raises
-    TaskError("route_stop_unconfirmed").
+    TaskError("route_stop_unconfirmed").  On the main thread the
+    finally below blocks SIGINT/SIGTERM/SIGHUP for the bounded cleanup
+    via an inline mask call as its first statement, always restores the
+    original mask recorded here, and re-raises any interrupt captured
+    while masking or unmasking so a real user interrupt outranks
+    route_timeout/route_overflow.
     """
-    if (not all(hasattr(os, n) for n in ("waitid", "killpg", "P_PID",
-                                         "WEXITED", "WNOHANG", "WNOWAIT"))
+    if (not child_status.supported()
+            or not all(hasattr(os, n) for n in ("killpg", "P_PID",
+                                                "WEXITED", "WNOHANG",
+                                                "WNOWAIT"))
             or not hasattr(signal, 'pthread_sigmask')):
         if before_launch is not None:
             raise RouteFailure("route_unavailable", "not_started", "spawn")
         raise TaskError("route_unavailable")
+    sigs = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+    main = threading.current_thread() is threading.main_thread()
+    orig_mask = (signal.pthread_sigmask(signal.SIG_BLOCK, ())
+                 if main else None)
+    deferred = None
     if before_launch is not None:
         before_launch()
     try:
@@ -339,7 +330,12 @@ def _spawn(argv, env, cwd, timeout, input_bytes=None, before_launch=None,
         body_exc = exc
         raise
     finally:
-        with _defer_signals():
+        try:
+            if main:
+                signal.pthread_sigmask(signal.SIG_BLOCK, sigs)
+        except BaseException as exc:
+            deferred = exc
+        try:
             cleanup_exc = cb_exc = None
             if sel is not None:
                 try:
@@ -376,6 +372,15 @@ def _spawn(argv, env, cwd, timeout, input_bytes=None, before_launch=None,
                     raise cleanup_exc
                 if cb_exc is not None:
                     raise cb_exc
+        finally:
+            if main:
+                try:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, orig_mask)
+                except BaseException as exc:
+                    if deferred is None:
+                        deferred = exc
+            if deferred is not None:
+                raise deferred
     if overflow:
         raise TaskError("route_overflow")
     if timed_out:

@@ -17,7 +17,7 @@ from co_v4.task import admission, infer
 
 @unittest.skipUnless(
     hasattr(signal, 'pthread_sigmask')
-    and hasattr(os, 'waitid')
+    and infer.child_status.supported()
     and hasattr(os, 'killpg'),
     'requires POSIX waitid/killpg/pthread_sigmask')
 class SpawnSignalDeferralTests(unittest.TestCase):
