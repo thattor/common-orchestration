@@ -706,6 +706,162 @@ class InferTests(unittest.TestCase):
         self.assertEqual(fail["reason"], "observation")
         self.assertFalse((newstate / "routes.json").exists())
 
+    def test_devin_export_malformed_or_nonobject(self):
+        """Unparseable bytes or a non-object top level -> route_failed."""
+        def corrupting(inner, blob):
+            def sp(argv, env, cwd, timeout, input_bytes=None):
+                rc, out, err = inner(argv, env, cwd, timeout,
+                                     input_bytes=input_bytes)
+                if "--export" in argv:
+                    ef = Path(argv[argv.index("--export") + 1])
+                    ef.write_bytes(blob)
+                return rc, out, err
+            return sp
+        cases = [
+            ("garbage", corrupting(Spawn(export=lambda p: atif(p, tc=[])),
+                                   b"{not json")),
+            ("top_list", Spawn(export=lambda p: [1, 2, 3])),
+            ("top_string", Spawn(export=lambda p: "not an object")),
+        ]
+        for name, sp in cases:
+            with self.subTest(case=name):
+                with mock.patch.object(infer, "_spawn", sp):
+                    with self.assertRaises(TaskError) as cm:
+                        self.routes.infer("implement", "x",
+                                          self.call / name)
+                self.assertCode(cm, "route_failed")
+
+    def test_devin_refusal_checked_before_schema(self):
+        """error / is_error outrank a wrong schema_version."""
+        for flag in ("error", "is_error"):
+            with self.subTest(flag=flag):
+                def export(p, flag=flag):
+                    d = atif(p, tc=[], schema="ATIF-9.9")
+                    d[flag] = True
+                    return d
+                with mock.patch.object(infer, "_spawn",
+                                       Spawn(export=export)):
+                    with self.assertRaises(TaskError) as cm:
+                        self.routes.infer("implement", "x",
+                                          self.call / flag)
+                self.assertCode(cm, "route_refused")
+
+    def test_devin_bad_schema_version(self):
+        for name, edit in (("wrong",
+                            lambda d: d.update(schema_version="ATIF-9.9")),
+                           ("missing",
+                            lambda d: d.pop("schema_version"))):
+            with self.subTest(case=name):
+                def export(p, edit=edit):
+                    d = atif(p, tc=[])
+                    edit(d)
+                    return d
+                with mock.patch.object(infer, "_spawn",
+                                       Spawn(export=export)):
+                    with self.assertRaises(TaskError) as cm:
+                        self.routes.infer("implement", "x",
+                                          self.call / name)
+                self.assertCode(cm, "route_failed")
+
+    def test_devin_tools_digest_gate_before_version(self):
+        """Tool-definition mismatch is route_unmeasured even when the
+        agent version is also wrong (header gate precedes it)."""
+        cases = {
+            "defs_not_list": lambda d: d["agent"].update(
+                tool_definitions="nope"),
+            "defs_and_version": lambda d: d["agent"].update(
+                tool_definitions=[{"name": "exec"}], version="2999.0.0"),
+        }
+        for name, edit in cases.items():
+            with self.subTest(case=name):
+                def export(p, edit=edit):
+                    d = atif(p, tc=[])
+                    edit(d)
+                    return d
+                with mock.patch.object(infer, "_spawn",
+                                       Spawn(export=export)):
+                    with self.assertRaises(TaskError) as cm:
+                        self.routes.infer("implement", "x",
+                                          self.call / name)
+                self.assertCode(cm, "route_unmeasured")
+
+    def test_devin_empty_final_message(self):
+        for name, final in (("empty", ""), ("null", None)):
+            with self.subTest(case=name):
+                exp = lambda p, final=final: atif(p, tc=[], final=final)
+                with mock.patch.object(infer, "_spawn", Spawn(export=exp)):
+                    with self.assertRaises(TaskError) as cm:
+                        self.routes.infer("implement", "x",
+                                          self.call / name)
+                self.assertCode(cm, "route_failed")
+
+    def test_claude_stream_envelope(self):
+        """Duplicate init, missing/empty result -> route_failed; a
+        tool_use still outranks a refused result -> route_violation."""
+        no_result = b"\n".join(claude_stream().splitlines()[:-1]) + b"\n"
+        cases = {
+            "duplicate_init": (claude_stream().splitlines()[0] + b"\n"
+                               + claude_stream(),
+                               "route_failed"),
+            "missing_result": (no_result, "route_failed"),
+            "empty_result": (claude_stream(text=""), "route_failed"),
+            "tool_use_over_error": (claude_stream(tool_uses=1, error=True),
+                                    "route_violation"),
+        }
+        for name, (blob, code) in cases.items():
+            with self.subTest(case=name):
+                with mock.patch.object(infer, "_spawn",
+                                       Spawn(claude=blob)):
+                    with self.assertRaises(TaskError) as cm:
+                        self.routes.infer("design", "x", self.call / name)
+                self.assertCode(cm, code)
+
+    def test_setup_malformed_induction_transcript(self):
+        """Structurally bad tool_calls/observation in an induction
+        export -> probe reason route_failed -> route_unqualified."""
+        def wrapped(mutate_step):
+            base = devin_export_factory("deny")
+
+            def export(prompt):
+                d = base(prompt)
+                if ("Read the file at " in prompt
+                        or "Write a new file at " in prompt
+                        or "shell command" in prompt):
+                    mutate_step(d["steps"][2])
+                return d
+            return export
+
+        cases = {
+            "tc_missing": lambda s: s.pop("tool_calls"),
+            "tc_not_list": lambda s: s.update(tool_calls="yes"),
+            "tc_item_not_dict": lambda s: s.update(tool_calls=[42]),
+            "obs_not_dict": lambda s: s.update(observation="x"),
+            "obs_results_not_list": lambda s: s.update(
+                observation={"results": "x"}),
+            "obs_result_bad_shape": lambda s: s.update(observation={
+                "results": [{"source_call_id": 1, "content": "x"}]}),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(case=name):
+                newstate = Path(self.tmp.name) / ("s-mal-" + name)
+                sp = Spawn(claude=self._claude_echo,
+                           export=wrapped(mutate))
+                with mock.patch.object(infer, "_spawn", sp), \
+                        mock.patch.object(
+                            infer.shutil, "which",
+                            side_effect=lambda n: str(
+                                self.claude_bin if n == "claude"
+                                else self.devin_bin)):
+                    with self.assertRaises(TaskError) as cm:
+                        infer.setup_routes(newstate, self.cwd)
+                self.assertCode(cm, "route_unqualified")
+                fail = json.loads(
+                    (newstate / "route_setup_failure.json").read_text())
+                self.assertEqual(fail["code"], "route_unqualified")
+                self.assertEqual(fail["route"], "devin")
+                self.assertEqual(fail["probe"], "read")
+                self.assertEqual(fail["reason"], "route_failed")
+
     # ---- fake routes ----
 
     def test_fake_routes(self):
