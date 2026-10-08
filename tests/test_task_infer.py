@@ -17,7 +17,7 @@ import unittest
 import unittest.mock as mock
 from pathlib import Path
 
-from co_v4.task import infer
+from co_v4.task import admission, infer
 from co_v4.task.common import TaskError, canonical, digest
 
 VERSIONS = {"claude": "2.1.291", "devin": "3000.11.3"}
@@ -167,7 +167,17 @@ class Spawn:
         self.rc = rc
         self.calls = []
 
-    def __call__(self, argv, env, cwd, timeout, input_bytes=None):
+    def __call__(self, argv, env, cwd, timeout, input_bytes=None,
+                 before_launch=None, *, on_stopped=None):
+        if before_launch is not None:
+            before_launch()
+        try:
+            return self._capture(argv, env, cwd, timeout, input_bytes)
+        finally:
+            if on_stopped is not None:
+                on_stopped(True)
+
+    def _capture(self, argv, env, cwd, timeout, input_bytes=None):
         self.calls.append(list(argv))
         if "--version" in argv:
             name = Path(argv[0]).name
@@ -221,7 +231,10 @@ class InferTests(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
         self.tmp = tempfile.TemporaryDirectory()
-        root = Path(self.tmp.name)
+        root = Path(self.tmp.name).resolve()
+        host = mock.patch.object(admission, '_host_root', return_value=root / 'host')
+        host.start()
+        self.addCleanup(host.stop)
         self.state, self.cwd, self.call = (root / "state", root / "cwd",
                                            root / "call")
         for d in (self.state, self.cwd, self.call, root / "bin"):
@@ -709,9 +722,9 @@ class InferTests(unittest.TestCase):
     def test_devin_export_malformed_or_nonobject(self):
         """Unparseable bytes or a non-object top level -> route_failed."""
         def corrupting(inner, blob):
-            def sp(argv, env, cwd, timeout, input_bytes=None):
+            def sp(argv, env, cwd, timeout, input_bytes=None, **hooks):
                 rc, out, err = inner(argv, env, cwd, timeout,
-                                     input_bytes=input_bytes)
+                                     input_bytes=input_bytes, **hooks)
                 if "--export" in argv:
                     ef = Path(argv[argv.index("--export") + 1])
                     ef.write_bytes(blob)

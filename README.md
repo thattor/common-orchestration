@@ -47,6 +47,16 @@ files. The original checkout, index and uncommitted work are preserved. The
 result includes changes, model assignments, selection reasons, review verdicts
 and verification evidence; it is not merged into the original branch.
 
+Independent `run` commands can execute concurrently, including with the same
+state directory. Each task retains its own workspace, journal and results;
+dependent steps within one task remain sequential. All task state directories
+and models on this user account share **12 slots per Native adapter**. Full
+capacity returns `capacity_full` before sending, with no queue or automatic
+model switch. `python -m co_v4.task capacity status` shows reserved and
+unconfirmed execution counts; these are not provider quota or proof of live
+processes. See [parallel tasks](RUNBOOK.md#parallel-tasks) for setup exclusion,
+interruption and upgrade limits.
+
 Use [RUNBOOK: Native AI coordination](RUNBOOK.md#native-ai-coordination)
 for setup and the single-goal command. New candidates live in `routes2.json`;
 legacy `routes.json` and saved task/1 and task/2 semantics are retained for resume.
@@ -57,11 +67,11 @@ the existing Controller Catalog or change the OpenAI-compatible API below.
 The bundled `skills/co-task/SKILL.md` is an optional entry point: in an AI
 window, give it the exact file path — the explicit-path workflow is the only
 documented use; auto-discovery, global installs and Plugin registration are
-unverified. It calls only the existing `run`, `status`, `decide` and `resume`
+unverified. It calls the runtime's `run`, `status`, `decide`, `resume` and `capacity status`
 commands, so it needs this extracted runtime directory and the task state
 location. The CLI equivalent is `python -m co_v4.task` run directly.
 
-Version: `VERSION` (`0.4.4`). Python **3.11, 3.12 or 3.13** — exactly
+Version: `VERSION` (`0.4.5`). Python **3.11, 3.12 or 3.13** — exactly
 the versions measured by CI; no other version is claimed. Product code
 is standard library only. CO release version and Controller/Adapter
 versions are independent.
@@ -232,7 +242,7 @@ PYTHONPATH=. python3 -m unittest discover -s tests -v
 
 ## Source distribution and verification
 
-This standalone 0.4.4 source distribution contains the measured engine,
+This standalone 0.4.5 source distribution contains the measured engine,
 CLI and common Skill. The maintainer retains the original release and
 test evidence separately. Engine and Skill bytes are unchanged; build
 paths, test fixtures and this README are adapted for the standalone tree.

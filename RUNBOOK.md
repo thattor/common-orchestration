@@ -168,13 +168,66 @@ route registry separate; it does not convert old state in place.
 Current limits: 1–6 sequential steps, at most one independent review step
 (plus re-review after its repair), one repair, 64 KiB per UTF-8 file,
 256 KiB source context, 900 seconds per model call and 60 seconds per
-verification command. Each state directory permits one model call at a
-time; a concurrent call fails with `route_busy`. The verifier allows scratch writes only and
+verification command. Independent task commands can run concurrently as
+described below. The verifier allows scratch writes only and
 denies network and Mach service access; tests needing installation,
 network, Keychain or writes to their sources are unsupported. A detached
 descendant remains sandboxed but is outside the process-group cleanup
 guarantee. Native inference itself is not OS-contained: tool policy and
 transcript checks are measured separately from the verifier sandbox.
+
+### Parallel tasks
+
+Start separate ordinary `run` commands for independent goals, using the same
+qualified state or separate qualified states. Keep each command in its own
+owned foreground session. Each task has a separate workspace, journal, call
+transcripts and result. Existing files in the original repository remain
+unchanged; combining the resulting changes is a separate integration step.
+Steps that consume earlier outputs within one task still run sequentially.
+
+The task entry point uses one private host ledger at
+`<passwd-home>/.co-task-host/capacity.db`. The home directory comes from the
+OS account, not `$HOME`. Changing state directories, models or environment
+variables does not create extra slots. Claude and Devin each share the
+existing per-adapter limit of 12 across all task calls and setup probes.
+There is no queue: `capacity_full` refuses a new model send. The selected
+role/model, measurement, tool restrictions and fresh Devin Free-tier check
+remain required. Provider rate limits can still be lower than this local cap.
+
+Inspect without starting a model or creating a ledger:
+
+    python -E -s -B -m co_v4.task capacity status </dev/null
+
+Counts distinguish `reserved` from `executing`; executing means an unresolved
+local execution lease, not necessarily a currently running process. Capacity
+is released only after proof that a child was never started or that the owned
+process group was stopped and reaped. This does not prove remote provider
+cancellation. Parent death, absent stop proof or an ambiguous launch keeps the
+slot occupied across restarts. Other tasks can use the remaining slots.
+Repeated interrupts can also interrupt cleanup; an unconfirmed slot stays held.
+There is no time-based expiry, force-release or automatic resend. Preserve
+held records for investigation; do not delete the ledger to reset capacity.
+Use task `status` to inspect the affected job, and keep the existing restrictions
+on resuming unknown outcomes.
+
+Inference shares the per-state lock. `setup` and `routes add` require its
+exclusive lock, and a second gate excludes setup across states that use the
+same Native working directory. Conflicts return `route_busy` before probe
+execution. An unresolved setup call continues to block that working directory
+after its parent exits. A normal unresolved call consumes its adapter slot but
+does not block other normal calls. Any held normal or setup lease blocks
+setup and `routes add` for that working directory until evidence-based recovery
+is available; creating another state directory does not evade this block.
+A detected shared-cwd mutation can fail several overlapping calls; it does not
+establish which call caused it. The Native working directory must be separate
+from the host ledger, so using the entire account home as Native cwd is refused.
+
+Before upgrading, finish or inspect all older task processes: pre-0.4.5
+runtimes do not participate in this host ledger. The same-state shared/exclusive
+lock still excludes an older runtime, but a different-state older runtime can
+bypass the new cap. The separately configured OpenAI-compatible service keeps
+its existing ledger configuration; it shares these counts only when explicitly
+configured with this same canonical ledger. No existing service state is moved.
 
 The following sections describe the existing OpenAI-compatible service.
 
@@ -195,7 +248,7 @@ per-file sha256 in the manifest. Any mismatch stops here.
 explicitly:
 
 ```sh
-python3 -I -c "import os, sys; sys.path.insert(0, '<EXTRACTED>/common-orchestration-v0.4.4'); import co_v4; real = os.path.realpath; assert os.path.commonpath([real(co_v4.__file__), real('<EXTRACTED>')]) == real('<EXTRACTED>')"
+python3 -I -c "import os, sys; sys.path.insert(0, '<EXTRACTED>/common-orchestration-v0.4.5'); import co_v4; real = os.path.realpath; assert os.path.commonpath([real(co_v4.__file__), real('<EXTRACTED>')]) == real('<EXTRACTED>')"
 ```
 
 For repeated use, a task-owned virtualenv may hold one `.pth` with the

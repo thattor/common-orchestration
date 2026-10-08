@@ -43,7 +43,7 @@ import re
 import subprocess
 import tarfile
 
-PREFIX = 'common-orchestration-v0.4.4'
+PREFIX = 'common-orchestration-v0.4.5'
 DOCS = ('VERSION', 'README.md', 'RUNBOOK.md', 'LICENSE.md', 'NOTICE',
         'examples/host.example.json',
         'examples/templates/PROVENANCE',

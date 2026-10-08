@@ -198,6 +198,37 @@ class TaskRecoveryTest(unittest.TestCase):
         self.assertEqual(res.get("status"), "awaiting_decision", res)
         return tid
 
+    def test_capacity_refusal_and_unconfirmed_stop_never_resend_on_resume(self):
+        for code, launched in (('capacity_full', False),
+                               ('route_stop_unconfirmed', True)):
+            with self.subTest(code=code):
+                native = self._mk({'planner': [PLAN_I], 'implement': [CHANGES]})
+                original = native.infer_selected
+                sends = []
+
+                def fail_implement(pin, role, prompt, call_dir, timeout=900,
+                                   before_launch=None):
+                    if role == 'implement':
+                        sends.append(role)
+                        if launched:
+                            before_launch()
+                        raise TaskError(code)
+                    return original(pin, role, prompt, call_dir, timeout,
+                                    before_launch=before_launch)
+
+                native.infer_selected = fail_implement
+                spec = self.spec3()
+                spec['selection'] = {'mode': 'fixed', 'targets': TARGETS}
+                result = self._run(spec)
+                self.assertFalse(result['verified'])
+                self.assertEqual(result['error']['code'], code)
+                before = list(sends), list(native.infer_calls)
+                resumed = runner.resume_task(self.state, self._tid(result), native,
+                                             verifier=self.verifier)
+                self.assertEqual(resumed, result)
+                self.assertEqual((sends, native.infer_calls), before)
+                self.assertEqual(sends, ['implement'])
+
     def test_preflight_failure_pauses_awaiting_decision(self):
         tid = self._paused({"planner": [PLAN_I], "implement": [
             _rf("route_unavailable", "not_started", "preflight")]})

@@ -27,7 +27,7 @@ import build_release as br          # noqa: E402
 import verify_release as vr         # noqa: E402
 
 ERR = br.ReleaseError
-PREFIX = 'common-orchestration-v0.4.4'
+PREFIX = 'common-orchestration-v0.4.5'
 BASE = Path('.')
 
 
@@ -57,7 +57,7 @@ class Fixture(unittest.TestCase):
         self.repo = self.dir / 'repo'
         self.repo.mkdir()
         git(self.repo, 'init', '-q')
-        put(self.repo, 'VERSION', b'0.4.4\n')
+        put(self.repo, 'VERSION', b'0.4.5\n')
         put(self.repo, 'README.md', b'# readme\n')
         put(self.repo, 'RUNBOOK.md', b'# runbook\n')
         put(self.repo, 'LICENSE.md', b'synthetic license\n')
@@ -260,7 +260,7 @@ class ManifestTests(Fixture):
             b"CONTROLLER_VERSION = '9.9.9'\n")
         manifest = br.generate_manifest(str(self.repo), self.sha,
                                         self.evidence(), str(archive))
-        self.assertEqual(manifest['co_version'], '0.4.4')
+        self.assertEqual(manifest['co_version'], '0.4.5')
         self.assertEqual(manifest['controller'],
                          {'version': '4.0.0',
                           'contract': 'co.controller/4'})
@@ -307,7 +307,7 @@ class ManifestTests(Fixture):
         archive = self._archive()
         for mutate in (
                 lambda ev: ev.update(git_sha='0' * 40),
-                lambda ev: ev.update(tag='other-v0.4.4'),
+                lambda ev: ev.update(tag='other-v0.4.5'),
                 lambda ev: ev['adapters'].pop('t3code.orchestration-v2'),
                 lambda ev: ev['adapters']['t3code.orchestration-v2']
                     .update(native_tested=[{'x': 1}]),

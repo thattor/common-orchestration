@@ -142,16 +142,48 @@ class HttpServiceTests(unittest.TestCase):
                 # after queuing its response. Other shutdown errors stay fatal.
                 if exc.errno != errno.ENOTCONN:
                     raise
-            out = b''
-            while True:
+            out, need, want = b'', None, 0
+            method = request.split(b' ', 1)[0]
+            while need is None or len(out) < need:
                 chunk = sock.recv(65536)
                 if not chunk:
                     break
                 out += chunk
+                if need is None:
+                    end = out.find(b'\r\n\r\n')
+                    if end >= 0:
+                        want = self._body_length(out[:end], method)
+                        need = end + 4 + want
         finally:
             sock.close()
-        head, _, blob = out.partition(b'\r\n\r\n')
+        head, sep, blob = out.partition(b'\r\n\r\n')
+        if not sep:
+            raise IndexError('truncated response headers: %r' % out)
+        if len(blob) < want:
+            raise http.client.IncompleteRead(blob, want)
+        if len(blob) > want:
+            raise ValueError('response carries %d bytes beyond '
+                             'Content-Length' % (len(blob) - want))
         return int(head.split(b' ')[1]), head, blob
+
+    @staticmethod
+    def _body_length(head, method):
+        lengths = []
+        for line in head.split(b'\r\n')[1:]:
+            name, _, value = line.partition(b':')
+            if name.strip().lower() != b'content-length':
+                continue
+            value = value.strip()
+            if not value.isdigit():
+                raise ValueError('malformed Content-Length: %r' % value)
+            lengths.append(int(value))
+        if len(set(lengths)) > 1:
+            raise ValueError('conflicting Content-Length: %r' % lengths)
+        if method == b'HEAD':
+            return 0
+        if not lengths:
+            raise ValueError('response carries no Content-Length')
+        return lengths[0]
 
     def post(self, path, headers, payload):
         blob = (payload if type(payload) is bytes
@@ -472,10 +504,11 @@ class RawHelperTests(unittest.TestCase):
     """raw() half-close edge cases: mock socket, no listener/SDK."""
 
     @staticmethod
-    def _raw(sock):
+    def _raw(sock, request=b'req'):
         with mock.patch.object(socket, 'create_connection',
                                return_value=sock):
-            return HttpServiceTests.raw(mock.Mock(port=1), b'req')
+            return HttpServiceTests.raw(mock.Mock(
+                port=1, _body_length=HttpServiceTests._body_length), request)
 
     def test_enotconn_still_reads_queued_response(self):
         blob = envelope(503)
@@ -507,6 +540,106 @@ class RawHelperTests(unittest.TestCase):
                                             'Socket is not connected')
         with self.assertRaises(IndexError):
             self._raw(sock)
+        sock.close.assert_called_once_with()
+
+    def test_complete_response_needs_no_second_recv(self):
+        blob = envelope(503)
+        response = (b'HTTP/1.0 503 Service Unavailable\r\n'
+                    b'Content-Length: ' + str(len(blob)).encode('ascii')
+                    + b'\r\n\r\n' + blob)
+        sock = mock.Mock()
+        sock.recv.side_effect = [response, ConnectionResetError(
+            errno.ECONNRESET, 'reset after complete response')]
+        status, head, body = self._raw(sock)
+        self.assertTrue(head.startswith(b'HTTP/1.0 503'))
+        self.assertEqual((status, body), (503, blob))
+        sock.recv.assert_called_once_with(65536)
+        sock.close.assert_called_once_with()
+
+    def test_fragmented_response_assembles_one_frame(self):
+        blob = envelope(409)
+        response = (b'HTTP/1.1 409 Conflict\r\nContent-Length: '
+                    + str(len(blob)).encode('ascii') + b'\r\n\r\n' + blob)
+        cut = response.find(b'\r\n\r\n') + 2
+        sock = mock.Mock()
+        sock.recv.side_effect = [response[:5], response[5:cut],
+                                 response[cut:], ConnectionResetError(
+                                     errno.ECONNRESET, 'late reset')]
+        status, _, body = self._raw(sock)
+        self.assertEqual((status, body), (409, blob))
+        self.assertEqual(sock.recv.call_count, 3)
+        sock.close.assert_called_once_with()
+
+    def test_reset_before_complete_frame_propagates(self):
+        blob = envelope(503)
+        response = (b'HTTP/1.1 503 Service Unavailable\r\n'
+                    b'Content-Length: ' + str(len(blob)).encode('ascii')
+                    + b'\r\n\r\n' + blob)
+        sock = mock.Mock()
+        sock.recv.side_effect = [response[:-3], ConnectionResetError(
+            errno.ECONNRESET, 'reset mid-body')]
+        with self.assertRaises(ConnectionResetError):
+            self._raw(sock)
+        sock.close.assert_called_once_with()
+
+    def test_eof_before_complete_body_refused(self):
+        sock = mock.Mock()
+        sock.recv.side_effect = [b'HTTP/1.1 503 Service Unavailable\r\n'
+                                 b'Content-Length: 90\r\n\r\n{}', b'']
+        with self.assertRaises(http.client.IncompleteRead):
+            self._raw(sock)
+        sock.close.assert_called_once_with()
+
+    def test_eof_inside_headers_refused(self):
+        sock = mock.Mock()
+        sock.recv.side_effect = [b'HTTP/1.1 503 Service Unavailable\r\n'
+                                 b'Content-Leng', b'']
+        with self.assertRaises(IndexError):
+            self._raw(sock)
+        sock.close.assert_called_once_with()
+
+    def test_missing_content_length_refused(self):
+        sock = mock.Mock()
+        sock.recv.side_effect = [b'HTTP/1.1 200 OK\r\n\r\n{}', b'']
+        with self.assertRaises(ValueError):
+            self._raw(sock)
+        sock.close.assert_called_once_with()
+
+    def test_malformed_content_length_refused(self):
+        sock = mock.Mock()
+        sock.recv.return_value = (b'HTTP/1.1 200 OK\r\nContent-Length: '
+                                  b'two\r\n\r\n{}')
+        with self.assertRaises(ValueError):
+            self._raw(sock)
+        sock.close.assert_called_once_with()
+
+    def test_conflicting_content_length_refused(self):
+        sock = mock.Mock()
+        sock.recv.return_value = (b'HTTP/1.1 200 OK\r\nContent-Length: 2'
+                                  b'\r\nContent-Length: 5\r\n\r\n{}')
+        with self.assertRaises(ValueError):
+            self._raw(sock)
+        sock.close.assert_called_once_with()
+
+    def test_bytes_beyond_content_length_refused(self):
+        sock = mock.Mock()
+        sock.recv.return_value = (b'HTTP/1.1 200 OK\r\nContent-Length: 2'
+                                  b'\r\n\r\n{}TRAILING')
+        with self.assertRaises(ValueError):
+            self._raw(sock)
+        sock.close.assert_called_once_with()
+
+    def test_head_response_reads_headers_only(self):
+        response = (b'HTTP/1.1 405 Method Not Allowed\r\nContent-Length: '
+                    + str(len(envelope(405))).encode('ascii')
+                    + b'\r\n\r\n')
+        sock = mock.Mock()
+        sock.recv.side_effect = [response, ConnectionResetError(
+            errno.ECONNRESET, 'close after headers')]
+        status, _, body = self._raw(
+            sock, b'HEAD /v1/models HTTP/1.1\r\nHost: x\r\n\r\n')
+        self.assertEqual((status, body), (405, b''))
+        sock.recv.assert_called_once_with(65536)
         sock.close.assert_called_once_with()
 
 

@@ -75,8 +75,33 @@ class TaskCliTest(unittest.TestCase):
         self.select.setup_candidates.assert_called_once_with(
             self.state, self.cwd, timeout=180)
         self.infer.setup_routes.assert_not_called()
-        sig.signal.assert_called_once()
-        self.assertIs(sig.signal.call_args.args[1], cli._sigterm)
+        self.assertEqual(sig.signal.call_args_list, [
+            mock.call(sig.SIGTERM, cli._sigterm),
+            mock.call(sig.SIGHUP, cli._sigterm)])
+
+    def test_capacity_status_needs_no_state_and_does_not_initialize(self):
+        host = Path(self.tmp.name).resolve() / 'host-capacity'
+        with mock.patch.object(cli.admission, '_host_root', return_value=host):
+            code, out, _ = self.invoke(['capacity', 'status'])
+        self.assertEqual(code, 0)
+        self.assertEqual(out['status'], 'ok')
+        self.assertEqual(out['capacity']['limit'], 12)
+        self.assertFalse(out['capacity']['initialized'])
+        self.assertFalse(host.exists())
+        self.runner.run_task.assert_not_called()
+        self.runner.resume_task.assert_not_called()
+        self.select.NativeCandidates.assert_not_called()
+
+    def test_capacity_status_refuses_unsafe_host_state(self):
+        host = Path(self.tmp.name).resolve() / 'unsafe-host-capacity'
+        host.mkdir(mode=0o755)
+        host.chmod(0o755)
+        with mock.patch.object(cli.admission, '_host_root', return_value=host):
+            code, out, _ = self.invoke(['capacity', 'status'])
+        self.assertEqual(code, 2)
+        self.assertEqual(out, {'status': 'error',
+                              'error': {'code': 'capacity_invalid'}})
+        self.assertFalse((host / 'capacity.db').exists())
 
     def test_setup_legacy_uses_routes_registry(self):
         code, out, _ = self.invoke([

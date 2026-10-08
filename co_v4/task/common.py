@@ -101,6 +101,12 @@ def parse_json(text: str) -> dict:
     return obj
 
 
+def _is_private_dir(st) -> bool:
+    return (not stat.S_ISLNK(st.st_mode) and stat.S_ISDIR(st.st_mode)
+            and stat.S_IMODE(st.st_mode) == 0o700
+            and st.st_uid == os.getuid())
+
+
 def private_dir(path: Path, exist_ok: bool = False) -> Path:
     """Return a 0700 same-owner dir, creating it durably when absent.
 
@@ -125,6 +131,10 @@ def private_dir(path: Path, exist_ok: bool = False) -> Path:
     try:
         path.mkdir(mode=0o700)
     except FileExistsError:
+        if exist_ok:
+            st = path.lstat() if os.path.lexists(path) else None
+            if st is not None and _is_private_dir(st):
+                return path
         raise TaskError('path_conflict', 'path already exists')
     os.chmod(path, 0o700)  # mkdir mode is umask-masked
     pfd = os.open(path.parent, os.O_RDONLY)
@@ -138,9 +148,12 @@ def private_dir(path: Path, exist_ok: bool = False) -> Path:
 class PrivateFileLock:
     """Private nonblocking flock; refuse unsafe files without repairing them."""
 
-    def __init__(self, path, busy_code="lock_busy"):
+    def __init__(self, path, busy_code="lock_busy", *, shared=False):
+        if not isinstance(shared, bool):
+            raise TypeError("shared must be a bool")
         self._path = path
         self._busy_code = busy_code
+        self._shared = shared
         self._fd = None
 
     def __enter__(self):
@@ -158,7 +171,8 @@ class PrivateFileLock:
                 raise TaskError("lock_invalid",
                      "lock file must be an owner-private regular file")
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                op = fcntl.LOCK_SH if self._shared else fcntl.LOCK_EX
+                fcntl.flock(fd, op | fcntl.LOCK_NB)
             except BlockingIOError as exc:
                 raise TaskError(
                     self._busy_code,
