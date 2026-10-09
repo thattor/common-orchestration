@@ -52,6 +52,11 @@ SOURCE_FILES = (
     'task/admission.py',
     'task/infer.py',
     'task/child_status.py',
+    'codex_rpc_sequence.py',
+    'codex_item_ledger.py',
+    'openai_transport.py',
+    'adapter_capacity.py',
+    'state.py',
 )
 
 _ENTRY_ALL_KEYS = frozenset({
