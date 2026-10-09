@@ -676,6 +676,45 @@ def capture_binding(binary, python, cwd, inventory, *, credential_files):
         _fail()
 
 
+def _validate_protected_state(protected_state, cwd):
+    try:
+        if type(protected_state) is not tuple or not 1 <= len(protected_state) <= 8:
+            _fail()
+        if type(cwd) is not str:
+            _fail()
+        cwd = _require_private_dir(cwd)
+        files = []
+        for entry in protected_state:
+            if not isinstance(entry, Path):
+                _fail()
+            value = os.fspath(entry)
+            path = _canonical_path(value)
+            st = _lstat(path)
+            if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+                _fail()
+            parent = _canonical_path(os.path.dirname(path))
+            if _within(parent, cwd) or _within(cwd, parent):
+                _fail()
+            files.append(Path(path))
+        from . import admission
+        ledger = os.fspath(admission.canonical_ledger_path())
+        ledger = _canonical_path(ledger)
+        st = _lstat(ledger)
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or (stat.S_IMODE(st.st_mode) != 384) or (st.st_nlink != 1):
+            _fail()
+        root = _canonical_path(os.path.dirname(ledger))
+        st = _lstat(root)
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or (stat.S_IMODE(st.st_mode) != 448):
+            _fail()
+        if Path(ledger) not in files:
+            _fail()
+        return tuple(files)
+    except TaskError:
+        raise
+    except Exception:
+        _fail()
+
+
 __all__ = (
     'ARGV_TEMPLATE',
     'SOURCE_FILES',

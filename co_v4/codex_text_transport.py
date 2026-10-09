@@ -362,9 +362,10 @@ class OwnedTransport(StdioTransport):
             self._state_lock.release()
         if not owner:
             if not self._stop_done.wait(wait_timeout_s):
-                return False
-            self.stopped = bool(self._stop_result)
-            return self.stopped
+                if self._stop_state != "done":
+                    return False
+                self._stop_done.set()
+            return bool(self._stop_result)
         result = launch_state in ("not_attempted", "no_child")
         interrupt = None
         try:
@@ -376,8 +377,8 @@ class OwnedTransport(StdioTransport):
             pass
         finally:
             self._stop_result = result
-            self._stop_state = "done"
             self.stopped = result
+            self._stop_state = "done"
             self._stop_done.set()
         if interrupt is not None:
             raise interrupt
@@ -435,11 +436,10 @@ class OwnedTransport(StdioTransport):
 
         try:
             try:
-                self.stopped = bool(self._physical_stop_once())
+                self._physical_stop_once()
             except Exception:
-                self.stopped = False
+                pass
             except BaseException as exc:
-                self.stopped = False
                 remember_base(exc)
             for stream in (getattr(self._process, "stdin", None),
                            getattr(self._process, "stdout", None)):
