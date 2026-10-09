@@ -47,6 +47,10 @@ ROUTE_KEYS = frozenset({'model', 'adapter', 'endpoint', 'auth_ref',
     'credential_file', 'manifest_file', 'launch_record', 'profile',
     'profile_digest', 'environment_ref', 'store_param', 'deadlines',
     'max_drain_s', 'verification'})
+NATIVE_ROUTE_KEYS = frozenset({'kind', 'model', 'adapter',
+    'environment_ref', 'measurement_state_dir', 'measurement_key',
+    'measurement_digest', 'native_cwd', 'effort', 'total_s',
+    'max_drain_s', 'max_output_bytes', 'verification'})
 PROFILE_KEYS = frozenset({'protocol', 'index_mode', 'sequence_mode',
     'inert_fields'})
 DEADLINE_KEYS = frozenset({'connect_s', 'first_byte_s', 'idle_s',
@@ -217,6 +221,26 @@ class RouteSpec:
 
 
 @dataclass(frozen=True)
+class NativeRouteSpec:
+    """Declared Native route leaf; Phase A shape only. Carries no wire
+    endpoint, credential, manifest, launch, profile or deadline fields
+    and is never produced by _route; nothing is qualified or opened."""
+    kind: str
+    model: str
+    adapter: str
+    environment_ref: str
+    measurement_state_dir: str
+    measurement_key: str
+    measurement_digest: str
+    native_cwd: str
+    effort: str
+    total_s: int
+    max_drain_s: int
+    max_output_bytes: int
+    verification: tuple[str, str, str, str, str]
+
+
+@dataclass(frozen=True)
 class HostConfig:
     state_root: str
     ledger_path: str
@@ -226,7 +250,8 @@ class HostConfig:
     registry_file: str
     max_body_bytes: int
     sync_wait_s: int
-    routes: tuple                   # RouteSpec, declaration order
+    routes: tuple                   # RouteSpec or NativeRouteSpec,
+                                    # declaration order
 
 
 def _profile(value, adapter):
@@ -310,6 +335,45 @@ def _route(value):
         verification=_verification(value['verification']))
 
 
+def _native_route(value):
+    """Phase A parser for a declared Native route. A returned spec means
+    the declaration is well-formed only; it is not dispatch,
+    qualification, capacity or permission. lstat/realpath only; no file
+    is opened and no transport or wire builder is touched."""
+    if type(value) is not dict or set(value) != NATIVE_ROUTE_KEYS:
+        raise HostConfigInvalid()
+    model, effort = value['model'], value['effort']
+    if (value['kind'] != 'native' or value['adapter'] != 'codex.app-server'
+            or not _ref(model, 256) or model in ('auto', 'default')
+            or not _ref(effort, 64) or effort in ('auto', 'default')):
+        raise HostConfigInvalid()
+    digest = value['measurement_digest']
+    if (value['measurement_key'] != 'codex/' + model
+            or not _prefixed_hex(digest, DIGEST_PREFIX)
+            or value['environment_ref'] != 'native:' + digest):
+        raise HostConfigInvalid()
+    if (not _int(value['total_s'], 1, 900)
+            or not _int(value['max_drain_s'], 1, 5)
+            or not _int(value['max_output_bytes'], 1, 1048576)):
+        raise HostConfigInvalid()
+    cwd = _canonical(value['native_cwd'], 'dir')
+    state = _canonical(value['measurement_state_dir'], 'dir')
+    try:
+        nested = os.path.commonpath((state, cwd)) in (state, cwd)
+    except ValueError:
+        raise HostConfigInvalid() from None
+    if nested:
+        raise HostConfigInvalid()
+    return NativeRouteSpec(
+        kind='native', model=model, adapter='codex.app-server',
+        environment_ref=value['environment_ref'],
+        measurement_state_dir=state, measurement_key='codex/' + model,
+        measurement_digest=digest, native_cwd=cwd, effort=effort,
+        total_s=value['total_s'], max_drain_s=value['max_drain_s'],
+        max_output_bytes=value['max_output_bytes'],
+        verification=_verification(value['verification']))
+
+
 def load_host_config(path):
     """Parse and fully validate the closed config; fixed refusal only."""
     path = _canonical(path, 'file')
@@ -332,13 +396,28 @@ def load_host_config(path):
     routes = data['routes']
     if type(routes) is not list or not 1 <= len(routes) <= 64:
         raise HostConfigInvalid()
-    specs = tuple(_route(r) for r in routes)
+    native = any(type(r) is dict and r.get('kind') == 'native'
+                 for r in routes)
+    ledger = _canonical(data['ledger_path'], 'new_file')
+    if native:
+        from .task import admission
+        from .task.common import TaskError
+        try:
+            canonical = str(admission.canonical_ledger_path())
+        except (TaskError, ValueError, OSError):
+            raise HostConfigInvalid() from None
+        if ledger != canonical:
+            raise HostConfigInvalid()
+    specs = tuple(
+        _native_route(r)
+        if type(r) is dict and r.get('kind') == 'native' else _route(r)
+        for r in routes)
     keys = [(s.model, s.adapter, s.environment_ref) for s in specs]
     if len(set(keys)) != len(keys):
         raise HostConfigInvalid()
     return HostConfig(
         state_root=_canonical(data['state_root'], 'dir'),
-        ledger_path=_canonical(data['ledger_path'], 'new_file'),
+        ledger_path=ledger,
         bind_host=bind['host'], bind_port=bind['port'],
         principals_file=_canonical(data['principals_file'], 'file'),
         registry_file=_canonical(data['registry_file'], 'file'),

@@ -12,6 +12,15 @@ environment_ref is shared by every pooled child of that route; the
 gate performs real manifest rehash, launch attestation and the /models
 probe at dispatch — nothing here is Native/Provider qualification.
 
+NativeRouteSpec declarations never touch the wire path: when any are
+configured, build_routes requires both trusted Python composition
+hooks (native_phase_b per spec -> exact NativeRouteConfig checked
+against the declaration by _native_catalog, native_factory bound at
+NATIVE_ADAPTER and never called during construction) to be callable
+before any wire or Native work. The seam composes already-declared
+configuration only — it establishes no measurement, availability,
+qualification, auth or execution authority.
+
 Two bounded readers, distinct contracts:
 - read_protected: 0600/uid/single-link/regular/NOFOLLOW — manifest and
   registry documents only;
@@ -29,12 +38,13 @@ from . import contracts as c
 from .adapters.openai_chat import OpenAIChatAdapter
 from .adapters.openai_responses import OpenAIResponsesAdapter
 from .catalog import Catalog, CatalogEntry, UseCase, Verification
-from .host_config import CredentialSupplier, HostConfig
+from .host_config import CredentialSupplier, HostConfig, NativeRouteSpec
 from .launch_attestation import (LaunchAttestor, RouteUnqualified,
                                  make_models_probe)
 from .openai_transport import (HttpSseTransport, OpenAIRoute,
                                payload_digest, strict_json)
-from .profile_registry import RouteConfig
+from .profile_registry import (NATIVE_ADAPTER, NativeRouteConfig,
+                               RouteConfig)
 from .protocol_profile import (ProfileError, environment_ref,
                                issue_profile, verify_manifest)
 from .qualified_route import QualifiedRouteGate
@@ -328,6 +338,57 @@ def _catalog(routes):
         for model, adapter in merged))
 
 
+def _native_catalog(specs, configs):
+    """Project trusted Native declarations into an existing Catalog.
+
+    Pure projection over already-accepted maintainer declarations, not
+    evidence discovery and not live, measurement, account, tool or
+    launch qualification: no filesystem, credential, wire, host or
+    runtime work happens here and no authority is granted beyond the
+    recorded refs."""
+    if type(specs) not in (list, tuple) or type(configs) not in (list, tuple) \
+            or len(specs) != len(configs):
+        raise RouteUnqualified('route_unqualified')
+    fields = ('model', 'adapter', 'environment_ref', 'measurement_state_dir',
+              'measurement_key', 'measurement_digest', 'native_cwd', 'effort',
+              'total_s', 'max_drain_s', 'max_output_bytes')
+    grouped = {}
+    for spec, config in zip(specs, configs):
+        if type(spec) is not NativeRouteSpec or type(config) is not NativeRouteConfig:
+            raise RouteUnqualified('route_unqualified')
+        ver = spec.verification
+        if spec.kind != 'native' or type(ver) is not tuple or len(ver) != 5 \
+                or any(type(ref) is not str for ref in ver) \
+                or any(type(getattr(spec, f)) is not type(getattr(config, f))
+                       or getattr(spec, f) != getattr(config, f) for f in fields):
+            raise RouteUnqualified('route_unqualified')
+        try:
+            use_case = UseCase(category=ver[0])
+            verification = Verification(
+                model=spec.model, adapter=spec.adapter, use_case=use_case,
+                environment_ref=spec.environment_ref, official_ref=ver[1],
+                implementation_ref=ver[2], measurement_ref=ver[3], ac_ref=ver[4],
+                auth_route='chatgpt', output_mode='collect')
+        except (TypeError, ValueError):
+            raise RouteUnqualified('route_unqualified') from None
+        key = (spec.model, spec.adapter)
+        verifications, recommendations, scopes = grouped.setdefault(
+            key, ([], {}, set()))
+        scope = (use_case, spec.environment_ref)
+        if scope in scopes:
+            raise RouteUnqualified('route_unqualified')
+        scopes.add(scope)
+        verifications.append(verification)
+        recommendations[use_case] = TEXT_ROUTE_RECOMMENDATION
+    try:
+        return Catalog(entries=tuple(
+            CatalogEntry(model=key[0], adapter=key[1], recommended_for=recs,
+                         verifications=tuple(vers))
+            for key, (vers, recs, scopes) in grouped.items()))
+    except (TypeError, ValueError):
+        raise RouteUnqualified('route_unqualified') from None
+
+
 def _child_factory(contexts, adapter):
     """Pooled child factory: request-bound protocol adapter only.
 
@@ -381,27 +442,58 @@ class RouteBundle:
     factories: Mapping
 
 
-def build_routes(config):
-    """Phase B for every declared route; refused startup is fixed-coded."""
+def build_routes(config, *, native_phase_b=None, native_factory=None):
+    """Phase B for every declared route; refused startup is fixed-coded.
+
+    native_phase_b/native_factory are trusted Python composition kwargs
+    only — never config fields, environment lookups or user input. When
+    any exact NativeRouteSpec is declared both must be callable before
+    any wire or Native Phase B work; native_phase_b(spec) is called
+    once per Native spec in configured order and must return an exact
+    NativeRouteConfig, which _native_catalog field-checks against the
+    declaration. native_factory is bound at NATIVE_ADAPTER and never
+    called during construction. Wire-only builds are unchanged."""
     if type(config) is not HostConfig:
         raise ValueError('closed host configuration required')
     keys = [(s.model, s.adapter, s.environment_ref)
             for s in config.routes]
     if len(set(keys)) != len(keys):
         raise RouteUnqualified('route_unqualified')
+    if (any(type(s) is NativeRouteSpec for s in config.routes)
+            and not (callable(native_phase_b)
+                     and callable(native_factory))):
+        raise RouteUnqualified('route_unqualified')
     suppliers, gates, contexts = {}, {}, {}
-    routes = []
+    wire_routes, sequence = [], []
+    native_specs, native_configs = [], []
     for spec in config.routes:
-        ctx = _phase_b(spec, suppliers, gates)
+        if type(spec) is NativeRouteSpec:
+            try:
+                ctx = native_phase_b(spec)
+                _native_catalog((spec,), (ctx,))
+            except Exception:
+                raise RouteUnqualified('route_unqualified') from None
+            native_specs.append(spec)
+            native_configs.append(ctx)
+        else:
+            ctx = _phase_b(spec, suppliers, gates)
+            wire_routes.append(ctx)
+        sequence.append(ctx)
         contexts[(ctx.model, ctx.adapter, ctx.environment_ref)] = ctx
-        routes.append(ctx)
-    configs = tuple(RouteConfig(
-        ctx.model, ctx.adapter, ctx.environment_ref, ctx.endpoint,
-        ctx.auth_ref, ctx.deadlines, ctx.max_drain_s, ctx.profile)
-        for ctx in routes)
+    configs = tuple(
+        item if type(item) is NativeRouteConfig else RouteConfig(
+            item.model, item.adapter, item.environment_ref, item.endpoint,
+            item.auth_ref, item.deadlines, item.max_drain_s, item.profile)
+        for item in sequence)
+    catalog = _catalog(wire_routes)
+    if native_specs:
+        catalog = Catalog(
+            catalog.entries
+            + _native_catalog(native_specs, native_configs).entries)
     factories = {adapter: _child_factory(contexts, adapter)
                  for adapter in ADAPTERS
                  if any(s.adapter == adapter for s in config.routes)}
-    return RouteBundle(_catalog(routes), configs,
-                       MappingProxyType(contexts),
+    if native_specs:
+        factories[NATIVE_ADAPTER] = native_factory
+    return RouteBundle(catalog, configs, MappingProxyType(contexts),
                        MappingProxyType(factories))

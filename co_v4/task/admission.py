@@ -31,7 +31,8 @@ from ..adapter_capacity import MAX_CONCURRENT, CapacityLedger
 from ..state import body_digest
 from .common import PrivateFileLock, RouteFailure, TaskError, canonical, digest
 
-_ROUTES = {'claude': 'claude.print', 'devin': 'devin.acp'}
+_ROUTES = {'claude': 'claude.print', 'devin': 'devin.acp',
+           'codex': 'codex.app-server'}
 _ROOT_NAME = '.co-task-host'
 _LEDGER = 'capacity.db'
 _EV_STOP = 'task-admission:stop-confirmed'
@@ -122,6 +123,41 @@ def _ensure_root(root: Path):
         raise TaskError('capacity_invalid')
 
 
+def canonical_ledger_path() -> Path:
+    """Trusted lexical path of the canonical capacity ledger.
+
+    Metadata-only check that creates nothing: a genuinely absent root or db
+    returns the lexical path untouched, while existing entries must be a
+    non-symlink owner-0700 root directory and a non-symlink single-link
+    owner-0600 regular file. Lexical equality proves neither device/inode
+    identity nor database validity; runtime re-checks happen elsewhere.
+    """
+    root = _lexical_root()
+    dbp = root / _LEDGER
+    try:
+        rst = root.lstat()
+    except FileNotFoundError:
+        return dbp
+    except OSError as exc:
+        raise TaskError('capacity_invalid') from exc
+    if (stat.S_ISLNK(rst.st_mode) or not stat.S_ISDIR(rst.st_mode)
+            or rst.st_uid != os.getuid()
+            or stat.S_IMODE(rst.st_mode) != 0o700):
+        raise TaskError('capacity_invalid')
+    try:
+        st = dbp.lstat()
+    except FileNotFoundError:
+        return dbp
+    except OSError as exc:
+        raise TaskError('capacity_invalid') from exc
+    if (stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode)
+            or st.st_uid != os.getuid()
+            or stat.S_IMODE(st.st_mode) != 0o600
+            or st.st_nlink != 1):
+        raise TaskError('capacity_invalid')
+    return dbp
+
+
 def _emit(path: Path, payload: dict, *, create: bool = False):
     """Write 0600 JSON evidence atomically; never overwrites unsafe files.
 
@@ -173,15 +209,8 @@ def _quiet(fn, *args):
         pass
 
 
-@contextmanager
-def gate(cwd, *, state_dir=None, setup=False, binding=None):
-    """Per-cwd fingerprint gate: SH flock normally, EX for setup.
-
-    While held, durable setup rows for this cwd block normal entry and any
-    held task/setup row blocks setup entry, even after a SIGKILL lost the
-    parent's flock. Ordinary task leases never block other tasks. Exit releases
-    only the flock, never ambiguous leases.
-    """
+def _resolve_gate_paths(cwd, state_dir):
+    """Resolve the native cwd, optional state dir and trusted host root."""
     try:
         base = Path(cwd).resolve(strict=True)
         if not base.is_dir():
@@ -196,6 +225,63 @@ def gate(cwd, *, state_dir=None, setup=False, binding=None):
         if other is not None and (root == other or root in other.parents
                                   or other in root.parents):
             raise TaskError('capacity_invalid')
+    return base, extra, root
+
+
+def _private_dir(raw):
+    """Canonical absolute owner-0700 non-symlink dir. Never created/repaired."""
+    path = Path(raw)
+    if not path.is_absolute():
+        raise TaskError('capacity_invalid')
+    try:
+        resolved = path.resolve(strict=True)
+        st = resolved.lstat()
+    except OSError as exc:
+        raise TaskError('capacity_invalid') from exc
+    if (path != resolved or stat.S_ISLNK(st.st_mode)
+            or not stat.S_ISDIR(st.st_mode)
+            or st.st_uid != os.getuid()
+            or stat.S_IMODE(st.st_mode) != 0o700):
+        raise TaskError('capacity_invalid')
+    return resolved
+
+
+def _check_gate_rows(ledger, scope, setup, codex_setup):
+    """Durable per-cwd row checks plus the explicit Codex setup barrier."""
+    try:
+        rows = ledger.unresolved()
+    except Exception as exc:
+        raise TaskError('capacity_invalid') from exc
+    held = set()
+    codex = False
+    for snap in rows:
+        if snap.ref.run_id == f'task-cwd:{scope}':
+            held.add('task')
+        elif snap.ref.run_id == f'setup-cwd:{scope}':
+            held.add('setup')
+        if snap.adapter == 'codex.app-server':
+            codex = True
+    if (setup and held) or (not setup and 'setup' in held):
+        raise TaskError('route_busy')
+    if setup and codex_setup and codex:
+        raise TaskError('route_busy')
+
+
+@contextmanager
+def gate(cwd, *, state_dir=None, setup=False, binding=None, codex_setup=False):
+    """Per-cwd fingerprint gate: SH flock normally, EX for setup.
+
+    While held, durable setup rows for this cwd block normal entry and any
+    held task/setup row blocks setup entry, even after a SIGKILL lost the
+    parent's flock. Ordinary task leases never block other tasks. Exit releases
+    only the flock, never ambiguous leases. codex_setup=True (setup only)
+    additionally refuses entry while any 'codex.app-server' lease stays
+    unresolved, whatever its origin, cwd, state dir, or model.
+    """
+    if (not isinstance(codex_setup, bool)
+            or (codex_setup and setup is not True)):
+        raise TaskError('capacity_invalid')
+    base, extra, root = _resolve_gate_paths(cwd, state_dir)
     _ensure_root(root)
     try:
         ledger = CapacityLedger(root / _LEDGER)
@@ -205,24 +291,44 @@ def gate(cwd, *, state_dir=None, setup=False, binding=None):
     lock = PrivateFileLock(root / f'gate-{scope}.lock',
                            busy_code='route_busy', shared=not setup)
     with lock:
-        try:
-            rows = ledger.unresolved()
-        except Exception as exc:
-            raise TaskError('capacity_invalid') from exc
-        held = set()
-        for snap in rows:
-            if snap.ref.run_id == f'task-cwd:{scope}':
-                held.add('task')
-            elif snap.ref.run_id == f'setup-cwd:{scope}':
-                held.add('setup')
-        if (setup and held) or (not setup and 'setup' in held):
-            raise TaskError('route_busy')
+        _check_gate_rows(ledger, scope, setup, codex_setup)
         token = _CURRENT.set(_Gate(base, 'setup' if setup else 'task',
                                    scope, binding, ledger, root))
         try:
             yield _CURRENT.get()
         finally:
             _CURRENT.reset(token)
+
+
+@contextmanager
+def hold(cwd, state_dir, *, binding=None):
+    """Shared inference hold around a caller-managed worker turn.
+
+    Requires an existing owner-private canonical state dir, takes its
+    'infer.lock' shared flock, then applies the ordinary non-setup durable
+    per-cwd row checks. Yields None: no gate ContextVar, lease, launch or
+    release authority is installed and model_call inside it fails the gate
+    check. Entry failure or normal exit releases only acquired FDs/flocks.
+    """
+    if _CURRENT.get() is not None:
+        raise TaskError('capacity_invalid')
+    sdir = _private_dir(state_dir)
+    base, _extra, root = _resolve_gate_paths(cwd, sdir)
+    if base == sdir or base in sdir.parents or sdir in base.parents:
+        raise TaskError('capacity_invalid')
+    _ensure_root(root)
+    try:
+        ledger = CapacityLedger(root / _LEDGER)
+    except Exception as exc:
+        raise TaskError('capacity_invalid') from exc
+    scope = hashlib.sha256(str(base).encode()).hexdigest()
+    lock = PrivateFileLock(sdir / 'infer.lock',
+                           busy_code='route_busy', shared=True)
+    with lock:
+        with PrivateFileLock(root / f'gate-{scope}.lock',
+                             busy_code='route_busy', shared=True):
+            _check_gate_rows(ledger, scope, False, False)
+            yield None
 
 
 def model_call(route, model, prompt, call_dir, invoke, *, before_launch=None):

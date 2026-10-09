@@ -19,7 +19,8 @@ from . import contracts as c
 from .catalog import UseCase
 from .controller import JobPlan
 from .gateway_store import MAX_CANONICAL_BYTES
-from .profile_registry import ProfileRegistry, RouteConfig, canonical
+from .profile_registry import (NativeRouteConfig, ProfileRegistry,
+                               RouteConfig, canonical)
 from .responses_input import RequestRejected, parse
 from .state import IntegrityViolation
 
@@ -58,7 +59,8 @@ class ProfilePlanner:
             raise ValueError('registry and fixed workspace required')
         route_map = {}
         for config in routes:
-            if type(config) is not RouteConfig:
+            if (type(config) is not RouteConfig
+                    and type(config) is not NativeRouteConfig):
                 raise ValueError('host RouteConfig required')
             key = (config.model, config.adapter, config.environment_ref)
             if key in route_map:
@@ -128,9 +130,15 @@ class ProfilePlanner:
             if config is None:
                 raise IntegrityViolation(
                     'pinned route missing host configuration')
-            conditions.append(c.ExecutionConditions(
-                model, adapter, self._workspace, env,
-                ('route-profile:' + config.profile.profile_digest,)))
+            if type(config) is NativeRouteConfig:
+                conditions.append(c.ExecutionConditions(
+                    model, adapter, config.native_cwd,
+                    config.environment_ref,
+                    ('native-measurement:' + config.measurement_digest,)))
+            else:
+                conditions.append(c.ExecutionConditions(
+                    model, adapter, self._workspace, env,
+                    ('route-profile:' + config.profile.profile_digest,)))
         job = c.Job(run.run_id, JOB_ID, entry.job_instructions,
                     entry.job_criteria, context_json=_context_json(intent),
                     output_candidate=True)

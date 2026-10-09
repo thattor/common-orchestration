@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 import hashlib
 import json
+from pathlib import Path
 from types import MappingProxyType
 
 from . import contracts as c
@@ -29,6 +30,7 @@ MAX_ROUTES = 64
 MAX_LITERALS = 64
 MAX_MEDIA = 32
 ADAPTERS = frozenset({'openai.responses', 'openai.chat'})
+NATIVE_ADAPTER = 'codex.app-server'
 BASE_CRITERIA = ('ac:media_types', 'ac:max_bytes', 'ac:non_whitespace',
                  'ac:no_forbidden_literals')
 ENTRY_KEYS = frozenset({'profile_id', 'effect_class', 'requires_output',
@@ -89,6 +91,24 @@ def _digest(value):
     return (type(value) is str and value.startswith('sha256:') and
             len(value) == 71 and
             all(ch in '0123456789abcdef' for ch in value[7:]))
+
+
+def _token(value, limit):
+    """Bounded printable text containing no whitespace at all."""
+    return (_text(value, limit) and value.isprintable()
+            and ' ' not in value)
+
+
+def _dir(value):
+    """Canonical absolute path naming an existing directory; stat only."""
+    if type(value) is not str or not value:
+        return False
+    try:
+        path = Path(value)
+        return (path.is_absolute() and path.is_dir()
+                and str(path.resolve()) == value)
+    except (OSError, ValueError):
+        return False
 
 
 def _alias(value):
@@ -173,6 +193,54 @@ class RouteConfig:
             raise ValueError('invalid route configuration')
 
 
+@dataclass(frozen=True)
+class NativeRouteConfig:
+    """Closed non-secret Native host route configuration.
+
+    Construction only proves static shape: the exact Codex app-server
+    adapter, consistent measurement references and canonical existing
+    state/cwd directories. Phase-B qualification, measurement binding
+    and per-call gates are enforced elsewhere; a resolved config is
+    never route acceptance.
+    """
+    model: str
+    adapter: str
+    environment_ref: str
+    measurement_state_dir: str
+    measurement_key: str
+    measurement_digest: str
+    native_cwd: str
+    effort: str
+    total_s: int
+    max_drain_s: int
+    max_output_bytes: int
+
+    def __post_init__(self):
+        if not (_token(self.model, 256)
+                and self.model not in ('auto', 'default')
+                and type(self.adapter) is str
+                and self.adapter == NATIVE_ADAPTER
+                and _digest(self.measurement_digest)
+                and _text(self.environment_ref)
+                and self.environment_ref
+                    == 'native:' + str(self.measurement_digest)
+                and _text(self.measurement_key)
+                and self.measurement_key == 'codex/' + self.model
+                and _token(self.effort, 64)
+                and self.effort not in ('auto', 'default')
+                and _dir(self.measurement_state_dir)
+                and _dir(self.native_cwd)
+                and _int(self.total_s) and 1 <= self.total_s <= 900
+                and _int(self.max_drain_s) and 1 <= self.max_drain_s <= 5
+                and _int(self.max_output_bytes)
+                and 1 <= self.max_output_bytes <= 1048576):
+            raise ValueError('invalid native route configuration')
+        state, cwd = (Path(self.measurement_state_dir),
+                      Path(self.native_cwd))
+        if state == cwd or cwd in state.parents or state in cwd.parents:
+            raise ValueError('invalid native route configuration')
+
+
 def _validate_ac(ac):
     if type(ac) is not dict or not AC_REQUIRED <= set(ac) <= AC_KEYS:
         raise ProfileRegistryInvalid()
@@ -248,7 +316,7 @@ def _validate_entry(entry):
 def _route_map(routes):
     result = {}
     for config in routes:
-        if type(config) is not RouteConfig:
+        if type(config) not in (RouteConfig, NativeRouteConfig):
             raise ProfileRegistryInvalid()
         key = (config.model, config.adapter, config.environment_ref)
         if key in result:
@@ -278,10 +346,16 @@ def _has_collect_verification(catalog, use_case, model, adapter, env):
 def _check_route(route, bound, use_case, catalog, route_map):
     """Static route resolvability; never provider qualification."""
     model, adapter, env = route
-    if adapter not in ADAPTERS:
-        raise ProfileRegistryInvalid()
     host = route_map.get(route)
-    if host is None:
+    if type(host) is NativeRouteConfig:
+        if (adapter != NATIVE_ADAPTER
+                or (host.model, host.adapter, host.environment_ref) != route
+                or not _has_collect_verification(catalog, use_case, model,
+                                                 adapter, env)
+                or host.total_s > bound[0] or host.max_drain_s > bound[1]):
+            raise ProfileRegistryInvalid()
+        return
+    if adapter not in ADAPTERS or type(host) is not RouteConfig:
         raise ProfileRegistryInvalid()
     if not _has_collect_verification(catalog, use_case, model, adapter, env):
         raise ProfileRegistryInvalid()

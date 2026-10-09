@@ -223,6 +223,24 @@ class PooledAdapter:
         with self._lock:
             return self.ledger.release_reserved(request, self._owner)
 
+    def assert_executing(self, request):
+        """Verify the retained, exactly-owned executing claim for request.
+
+        Called synchronously from child.execute on the Controller thread
+        while execute holds self._lock (reentrant); never from async
+        workers, which contend on the same lock in stop. Pure check: no
+        reserve, claim, release, child construction or state mutation,
+        and no _children/_receipts presence is required.
+        """
+        with self._lock:
+            if (self._requests.get(request.ref) != request
+                    or request.conditions.adapter != self.adapter):
+                raise CapacityError('executing claim does not bind this request')
+            row = self.ledger.row(request.ref, self.adapter)
+            if row is None or row[:3] != (body_digest(request),
+                                          self._owner, 'executing'):
+                raise CapacityError('executing claim does not bind this request')
+
     def execute(self, request):
         with self._lock:
             if request.ref in self._receipts:
