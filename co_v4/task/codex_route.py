@@ -614,9 +614,72 @@ def _capture_credentials(credential_files, cwd, home):
         _fail()
 
 
+def capture_binding(binary, python, cwd, inventory, *, credential_files):
+    try:
+        if not all(isinstance(value, (str, Path))
+                   for value in (binary, python, cwd)):
+            _fail()
+        canonical_binary = _canonical_path(os.fspath(binary))
+        canonical_python = _canonical_path(os.fspath(python))
+        home = _expected_home()
+        if (os.environ.get('HOME') != home
+                or 'CODEX_HOME' in os.environ):
+            _fail()
+        canonical_cwd = _require_private_dir(os.fspath(cwd))
+        if (type(inventory) is not dict
+                or set(inventory) != {'native_version',
+                                      'disabled_mcp_servers',
+                                      'cleared_environment_keys'}):
+            _fail()
+        if (type(inventory['native_version']) is not str
+                or inventory['native_version'] != ROUTE_VERSION):
+            _fail()
+        servers = inventory['disabled_mcp_servers']
+        env_keys = inventory['cleared_environment_keys']
+        if (type(servers) is not tuple or len(servers) > 64
+                or type(env_keys) is not tuple or len(env_keys) > 128
+                or any(type(item) is not str
+                       for item in servers + env_keys)):
+            _fail()
+        servers = list(servers)
+        env_keys = list(env_keys)
+        _validate_sorted_list(servers, 64, _MCP_NAME_RE)
+        _validate_sorted_list(env_keys, 128, _ENV_KEY_RE)
+        records, forbidden = _capture_credentials(
+            credential_files, canonical_cwd, home)
+        codex_dir = _canonical_path(os.path.join(home, '.codex'))
+        credential_paths = {record['path'] for record in records}
+        for path in (canonical_binary, canonical_python):
+            if (path == codex_dir or _within(path, codex_dir)
+                    or path in credential_paths):
+                _fail()
+        binary_digest = _hash_path(canonical_binary, _MAX_CODE_BYTES,
+                                   executable=True, forbidden=forbidden)
+        python_digest = _hash_path(canonical_python, _MAX_CODE_BYTES,
+                                   executable=True, forbidden=forbidden)
+        sources = _capture_sources(forbidden)
+        return {
+            'schema': CONFIG_SCHEMA,
+            'binary': canonical_binary,
+            'binary_digest': binary_digest,
+            'python': canonical_python,
+            'python_digest': python_digest,
+            'measurement_home': home,
+            'credential_files': [dict(record) for record in records],
+            'disabled_mcp_servers': servers,
+            'cleared_environment_keys': env_keys,
+            'sources': dict(sources),
+        }
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:
+        _fail()
+
+
 __all__ = (
     'ARGV_TEMPLATE',
     'SOURCE_FILES',
+    'capture_binding',
     'measurement_digest',
     'read_config',
     'validate_entry',

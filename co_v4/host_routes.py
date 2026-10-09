@@ -29,12 +29,12 @@ from . import contracts as c
 from .adapters.openai_chat import OpenAIChatAdapter
 from .adapters.openai_responses import OpenAIResponsesAdapter
 from .catalog import Catalog, CatalogEntry, UseCase, Verification
-from .host_config import CredentialSupplier, HostConfig
+from .host_config import CredentialSupplier, HostConfig, NativeRouteSpec
 from .launch_attestation import (LaunchAttestor, RouteUnqualified,
                                  make_models_probe)
 from .openai_transport import (HttpSseTransport, OpenAIRoute,
                                payload_digest, strict_json)
-from .profile_registry import RouteConfig
+from .profile_registry import NativeRouteConfig, RouteConfig
 from .protocol_profile import (ProfileError, environment_ref,
                                issue_profile, verify_manifest)
 from .qualified_route import QualifiedRouteGate
@@ -326,6 +326,57 @@ def _catalog(routes):
                       for use in merged[(model, adapter)]['uses']},
                      tuple(merged[(model, adapter)]['vs']))
         for model, adapter in merged))
+
+
+def _native_catalog(specs, configs):
+    """Project trusted Native declarations into an existing Catalog.
+
+    Pure projection over already-accepted maintainer declarations, not
+    evidence discovery and not live, measurement, account, tool or
+    launch qualification: no filesystem, credential, wire, host or
+    runtime work happens here and no authority is granted beyond the
+    recorded refs."""
+    if type(specs) not in (list, tuple) or type(configs) not in (list, tuple) \
+            or len(specs) != len(configs):
+        raise RouteUnqualified('route_unqualified')
+    fields = ('model', 'adapter', 'environment_ref', 'measurement_state_dir',
+              'measurement_key', 'measurement_digest', 'native_cwd', 'effort',
+              'total_s', 'max_drain_s', 'max_output_bytes')
+    grouped = {}
+    for spec, config in zip(specs, configs):
+        if type(spec) is not NativeRouteSpec or type(config) is not NativeRouteConfig:
+            raise RouteUnqualified('route_unqualified')
+        ver = spec.verification
+        if spec.kind != 'native' or type(ver) is not tuple or len(ver) != 5 \
+                or any(type(ref) is not str for ref in ver) \
+                or any(type(getattr(spec, f)) is not type(getattr(config, f))
+                       or getattr(spec, f) != getattr(config, f) for f in fields):
+            raise RouteUnqualified('route_unqualified')
+        try:
+            use_case = UseCase(category=ver[0])
+            verification = Verification(
+                model=spec.model, adapter=spec.adapter, use_case=use_case,
+                environment_ref=spec.environment_ref, official_ref=ver[1],
+                implementation_ref=ver[2], measurement_ref=ver[3], ac_ref=ver[4],
+                auth_route='chatgpt', output_mode='collect')
+        except (TypeError, ValueError):
+            raise RouteUnqualified('route_unqualified') from None
+        key = (spec.model, spec.adapter)
+        verifications, recommendations, scopes = grouped.setdefault(
+            key, ([], {}, set()))
+        scope = (use_case, spec.environment_ref)
+        if scope in scopes:
+            raise RouteUnqualified('route_unqualified')
+        scopes.add(scope)
+        verifications.append(verification)
+        recommendations[use_case] = TEXT_ROUTE_RECOMMENDATION
+    try:
+        return Catalog(entries=tuple(
+            CatalogEntry(model=key[0], adapter=key[1], recommended_for=recs,
+                         verifications=tuple(vers))
+            for key, (vers, recs, scopes) in grouped.items()))
+    except (TypeError, ValueError):
+        raise RouteUnqualified('route_unqualified') from None
 
 
 def _child_factory(contexts, adapter):
