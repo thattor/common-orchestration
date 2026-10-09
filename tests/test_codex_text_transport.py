@@ -579,6 +579,52 @@ class OwnedTransportTests(unittest.TestCase):
 
 class OwnedTransportDeltaTests(unittest.TestCase):
     spawn = OwnedTransportTests.spawn
+
+    @staticmethod
+    def _hold(lock, held, free):
+        with lock:
+            held.set()
+            free.wait(5)
+
+    def test_owner_and_non_owner_complete_without_lock(self):
+        s = self.spawn(); t = s.transport(max_drain_s=1)
+        hit, go, held, free, waiting = (threading.Event() for _ in range(5))
+        wait = t._stop_done.wait
+        s.stack.enter_context(mock.patch.object(t._stop_done, "wait",
+            side_effect=lambda timeout: (waiting.set(), wait(timeout))[1]))
+        s.stack.enter_context(mock.patch.object(t._infer, "_stop_group",
+            lambda p: (hit.set(), go.wait(5), s._stop(p))[2]))
+        out = {}
+        owner = threading.Thread(target=lambda: out.setdefault("o", t.stop_group_only(lock_timeout_s=.05)))
+        late = threading.Thread(target=lambda: out.setdefault("n", t.stop_group_only(lock_timeout_s=.05)))
+        holder = threading.Thread(target=lambda: self._hold(t._state_lock, held, free))
+        try:
+            owner.start(); self.assertTrue(hit.wait(5))
+            late.start(); self.assertTrue(waiting.wait(5))
+            holder.start(); self.assertTrue(held.wait(5))
+            go.set(); owner.join(1); late.join(1)
+            self.assertFalse(owner.is_alive() or late.is_alive())
+            self.assertIs(out.get("o"), False); self.assertIs(out.get("n"), False)
+            self.assertTrue(t._stop_done.is_set() and t.stopped)
+            self.assertFalse(t._process.stdin.closed or t._callback_fired)
+        finally:
+            go.set(); free.set()
+            for th in (owner, late, holder):
+                if th.ident is not None: th.join(1)
+        t.close()
+        self.assertEqual((s.events.count(("stopped", True)), s.events.count("stop")), (1, 1))
+
+    def test_helper_interrupt_fires_callback_false_once(self):
+        s = self.spawn(); s.stop_error = KeyboardInterrupt()
+        t = s.transport(max_drain_s=1)
+        with self.assertRaises(KeyboardInterrupt) as cm: t.stop_group_only()
+        self.assertIs(cm.exception, s.stop_error)
+        self.assertTrue(t._stop_done.is_set() and not t.stopped)
+        self.assertFalse(t._process.stdin.closed)
+        self.assertEqual(s.events.count(("stopped", False)), 1)
+        t.close()
+        self.assertEqual((s.events.count(("stopped", False)), s.events.count("stop")), (1, 1))
+        self.assertTrue(t._process.stdin.closed)
     def test_main_construct_worker_cleanup_does_not_mask_worker(self):
         s = self.spawn(); t = s.transport()
         s.proc.eof(); s.natural_exit(); errors = []
@@ -758,6 +804,100 @@ class OwnedTransportDeltaTests(unittest.TestCase):
         flags = [e[1] for e in s.events
                  if isinstance(e, tuple) and e[:1] == ("stopped",)]
         self.assertEqual(flags, [False])
+
+
+class OwnedTransportBirthTests(unittest.TestCase):
+    spawn = OwnedTransportDeltaTests.spawn
+
+    def test_gate_and_registration_snapshot(self):
+        s = self.spawn(); cancel = threading.Event(); cancel.set(); seen = []
+        with self.assertRaises(NoChild):
+            s.transport(cancel=cancel, register_transport=seen.append)
+        self.assertEqual((seen, s.events, s.popen.call_count), ([], [], 0))
+        s = self.spawn(); seen = []
+        def register(t):
+            seen.append((t._process, bytes(t._incoming), bytes(t._outgoing),
+                         t._eof, t._launch_state, t._closed)); s.events.append("register")
+        t = s.transport(register_transport=register)
+        self.assertEqual(seen, [(None, b"", b"", False, "not_attempted", False)])
+        self.assertEqual(s.events[:3], ["register", "before", "popen"]); t.close()
+
+    def test_rejected_registration_or_hook_cannot_spawn(self):
+        s = self.spawn(); slots = []
+        def bad_register(t): slots.append(t); raise RuntimeError("slot")
+        with self.assertRaisesRegex(RuntimeError, "slot"):
+            s.transport(register_transport=bad_register)
+        self.assertTrue(slots[0]._closed); self.assertTrue(slots[0].stop_group_only())
+        s2 = self.spawn()
+        def bad_before(): s2.events.append("before"); raise ValueError("claim")
+        with self.assertRaisesRegex(ValueError, "claim"):
+            s2.transport(register_transport=slots.append, before_launch=bad_before)
+        self.assertTrue(slots[1]._closed); self.assertTrue(slots[1].stop_group_only())
+        self.assertEqual((s.popen.call_count, s2.popen.call_count), (0, 0))
+        self.assertEqual((s.events, s2.events), ([], ["before"]))
+
+    def test_cancel_after_returned_hook_is_once_true(self):
+        s = self.spawn(); cancel = threading.Event()
+        def before(): s.events.append("before"); cancel.set()
+        with self.assertRaises(NoChild):
+            s.transport(cancel=cancel, before_launch=before)
+        self.assertEqual(s.events, ["before", ("stopped", True)])
+        s.popen.assert_not_called(); self.assertNotIn("stop", s.events)
+
+    def test_public_timeout_then_inflight_child_is_stopped_once(self):
+        s = self.spawn(); entered = threading.Event(); release = threading.Event()
+        done = threading.Event(); slot = []; outcome = []
+        def blocked_popen(argv, **kw):
+            s.events.append("popen"); entered.set()
+            if not release.wait(2): raise RuntimeError("release")
+            return s.proc
+        s.popen.side_effect = blocked_popen
+        def birth():
+            try: s.transport(register_transport=slot.append)
+            except BaseException as exc: outcome.append(exc)
+            finally: done.set()
+        worker = threading.Thread(target=birth, daemon=True); worker.start()
+        try:
+            self.assertTrue(entered.wait(2)); child = slot[0]
+            self.assertFalse(child.stop_group_only(lock_timeout_s=0.05))
+        finally: release.set()
+        self.assertTrue(done.wait(2)); worker.join(1); self.assertFalse(worker.is_alive())
+        self.assertIs(type(outcome[0]), NativeError)
+        self.assertIs(child._process, s.proc); self.assertEqual(s.popen.call_count, 1)
+        self.assertIn("stop", s.events); self.assertIn(("stopped", True), s.events)
+        self.assertTrue(s.proc.stdin.closed)
+
+    def test_unknown_failure_and_original_interrupt_survive(self):
+        s = self.spawn(); slots = []; original = RuntimeError("boom")
+        s.popen_error = original
+        with self.assertRaises(RuntimeError) as caught:
+            s.transport(register_transport=slots.append)
+        self.assertIs(caught.exception, original); partial = slots[0]
+        self.assertEqual(partial._launch_state, "unknown")
+        self.assertFalse(partial.stop_group_only()); partial.close()
+        self.assertEqual((s.popen.call_count, s.events.count("stop"),
+                          s.events.count(("stopped", False))), (1, 0, 1))
+        s = self.spawn(); original = KeyboardInterrupt("launch")
+        s.popen_error = original
+        def stopped(flag): raise SystemExit("callback")
+        with self.assertRaises(KeyboardInterrupt) as caught:
+            s.transport(on_stopped=stopped)
+        self.assertIs(caught.exception, original)
+    def test_alive_lookup_precedes_stop_election_at_lock_exit(self):
+        s = self.spawn(); t = s.transport(); real = t._state_lock; fired = []
+        class BoundaryLock:
+            def acquire(self, *a, **kw): return real.acquire(*a, **kw)
+            def release(self): return real.release()
+            def __enter__(self): real.acquire(); return self
+            def __exit__(self, *_):
+                real.release()
+                if not fired: fired.append(True); t.stop_group_only()
+        def leader(proc): self.assertIsNone(t._stop_state); return s.running
+        t._state_lock = BoundaryLock()
+        with mock.patch.object(t._infer, "_leader_running", side_effect=leader):
+            self.assertTrue(t.alive())
+        self.assertTrue(t.stopped); t.close()
+
 
 if __name__ == "__main__":
     unittest.main()

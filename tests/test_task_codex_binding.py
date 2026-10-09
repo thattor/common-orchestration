@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from co_v4.task import codex_route as route
@@ -24,9 +25,11 @@ class CodexRouteBindingTests(unittest.TestCase):
         self.native = self.base / 'native-cwd'
         self.config_dir = self.base / 'private-config'
         self.binary_dir = self.base / 'installed'
-        self.credential_dir = self.base / 'credentials'
+        fixture_home = self.base / 'measurement-home'
+        self.credential_dir = fixture_home / '.codex'
         self.package_root = self.base / 'co_v4'
         for path in (self.native, self.config_dir, self.binary_dir,
+                     fixture_home,
                      self.credential_dir, self.package_root,
                      self.package_root / 'task',
                      self.package_root / 'adapters'):
@@ -46,11 +49,11 @@ class CodexRouteBindingTests(unittest.TestCase):
         self.python.write_bytes(b'python executable fixture')
         os.chmod(self.python, 0o755)
 
-        self.credential = self.credential_dir / 'credential'
+        self.credential = self.credential_dir / 'auth.json'
         self.credential.write_bytes(b'fixture-only credential')
         os.chmod(self.credential, 0o600)
 
-        self.home = os.path.realpath(pwd.getpwuid(os.geteuid()).pw_dir)
+        self.home = self._canonical(fixture_home)
         self.config_path = self.config_dir / 'binding.json'
         self.config_obj = {
             'schema': 'co.codex-text-binding/1',
@@ -112,6 +115,11 @@ class CodexRouteBindingTests(unittest.TestCase):
             route, '_package_root', return_value=self.package_root)
         self.package_patcher.start()
         self.addCleanup(self.package_patcher.stop)
+        self.pwd_patcher = mock.patch.object(
+            route.pwd, 'getpwuid',
+            return_value=SimpleNamespace(pw_dir=self.home))
+        self.pwd_patcher.start()
+        self.addCleanup(self.pwd_patcher.stop)
         self.env_patcher = mock.patch.dict(
             os.environ, {'HOME': self.home}, clear=True)
         self.env_patcher.start()
@@ -363,6 +371,17 @@ class CodexRouteBindingTests(unittest.TestCase):
                         route.os, 'open') as opened:
                 self.assert_unmeasured(lambda: route.read_config(self.entry))
                 opened.assert_not_called()
+
+    def test_native_auth_cannot_be_replaced_by_an_unrelated_credential(self):
+        alternate = self.base / 'unrelated-credential'
+        alternate.write_bytes(b'fixture-only unrelated credential')
+        os.chmod(alternate, 0o600)
+        config = copy.deepcopy(self.config_obj)
+        config['credential_files'] = [self._credential_descriptor(alternate)]
+        self._install_config(config)
+        with mock.patch.object(route, '_hash_path') as hashed:
+            self.assert_unmeasured(lambda: route.read_config(self.entry))
+            hashed.assert_not_called()
 
     def test_native_auth_directory_is_refused_before_config_open(self):
         home = self.base / 'fixture-home'

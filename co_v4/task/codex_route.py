@@ -101,7 +101,7 @@ _ENV_KEY_RE = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,127}')
 _ARGV_DIGEST = digest(canonical(list(_ARGV_TEMPLATE)).encode('utf-8'))
 _MAX_PATH = 4096
 _MAX_CONFIG_BYTES = 262144
-_MAX_CODE_BYTES = 128 * 1024 * 1024
+_MAX_CODE_BYTES = 512 * 1024 * 1024
 _MAX_SOURCE_BYTES = 1024 * 1024
 _READ_CHUNK = 65536
 _RESERVED_VALUES = frozenset({'auto', 'default'})
@@ -478,6 +478,9 @@ def _validate_config_object(config, entry, native_cwd, config_identity):
     if (home != expected_home or os.environ.get('HOME') != expected_home
             or 'CODEX_HOME' in os.environ):
         _fail()
+    auth = _canonical_path(os.path.join(home, '.codex', 'auth.json'))
+    if auth not in {item['path'] for item in config['credential_files']}:
+        _fail()
 
     _validate_sorted_list(config['disabled_mcp_servers'], 64, _MCP_NAME_RE)
     _validate_sorted_list(config['cleared_environment_keys'], 128,
@@ -546,6 +549,65 @@ def validate_entry(entry, model, cwd):
             _fail()
         read_config(entry)
         return entry
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:
+        _fail()
+
+
+def _capture_sources(forbidden):
+    if (type(forbidden) is not frozenset
+            or not 1 <= len(forbidden) <= 8):
+        _fail()
+    for identity in forbidden:
+        if (type(identity) is not tuple or len(identity) != 2
+                or any(type(part) is not int or part < 0
+                       for part in identity)):
+            _fail()
+
+    root = _canonical_path(os.fspath(_package_root()))
+    captured = {}
+    for name in SOURCE_FILES:
+        if not isinstance(name, str) or not name or chr(0) in name:
+            _fail()
+        try:
+            rel = PurePosixPath(name)
+        except Exception:
+            _fail()
+        if (rel.is_absolute() or not rel.parts or name != rel.as_posix()
+                or any(part in ('', '.', '..') for part in rel.parts)):
+            _fail()
+        path = _canonical_path(os.path.join(root, rel.as_posix()))
+        if not _within(path, root):
+            _fail()
+        captured[name] = _hash_path(
+            path, _MAX_SOURCE_BYTES, forbidden=forbidden)
+    return captured
+
+
+def _capture_credentials(credential_files, cwd, home):
+    try:
+        if (type(credential_files) is not tuple or not credential_files
+                or len(credential_files) > 8):
+            _fail()
+        for value in credential_files + (cwd, home):
+            if not isinstance(value, (str, Path)):
+                _fail()
+        canonical_cwd = _canonical_path(os.fspath(cwd))
+        canonical_home = _canonical_path(os.fspath(home))
+        native_auth = _canonical_path(
+            os.path.join(canonical_home, '.codex', 'auth.json'))
+        paths = [_canonical_path(os.fspath(value))
+                 for value in credential_files]
+        if native_auth not in paths:
+            _fail()
+        records = []
+        for path in paths:
+            st = _lstat(path)
+            records.append({'path': path, 'dev': st.st_dev, 'ino': st.st_ino,
+                            'uid': st.st_uid, 'mode': st.st_mode})
+        forbidden = _validate_credentials(list(records), canonical_cwd)
+        return tuple(records), forbidden
     except (KeyboardInterrupt, SystemExit):
         raise
     except Exception:
