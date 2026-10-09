@@ -7,6 +7,11 @@ from .codex_errors import HostUnverified
 
 NATIVE_VERSION = "codex-cli 0.159.2"
 
+# Exact releases whose model/list semantics are accepted; not a version range.
+# Membership only permits fresh model/list qualification below; it is never
+# itself evidence of effort support or thread-level effective effort.
+SUPPORTED_NATIVE_VERSIONS = frozenset({NATIVE_VERSION, "codex-cli 0.160.1"})
+
 
 def validate_selection(model, effort):
     # Syntax only. Availability and compatibility require this launch's metadata.
@@ -56,7 +61,7 @@ def model_choices(rpc):
 
 def verify_selection(rpc, *, model, effort, effective_effort, native_version, request_digest):
     validate_selection(model, effort)
-    if native_version != NATIVE_VERSION:
+    if native_version not in SUPPORTED_NATIVE_VERSIONS:
         raise HostUnverified("model_selection_native_version_unsupported")
     choices = model_choices(rpc)
     selected = choices.get(model)

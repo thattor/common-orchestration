@@ -29,8 +29,9 @@ from .gateway_store import MAX_CANONICAL_BYTES
 from .host_routes import TEXT_WORKSPACE
 from .judgment import TrustedEvidence
 from .profile_planner import ProfilePlanner
-from .profile_registry import (ADAPTERS, ProfileRegistry,
-                               ProfileRegistryMismatch, RouteConfig)
+from .profile_registry import (ADAPTERS, NativeRouteConfig,
+                               ProfileRegistry, ProfileRegistryMismatch,
+                               RouteConfig)
 from .responses_input import RequestRejected, parse
 from .state import IntegrityViolation, body_digest
 
@@ -50,12 +51,25 @@ def make_evidence(store, registry, route_bundle):
     if type(registry) is not ProfileRegistry:
         raise ValueError('profile registry required')
     routes = tuple(route_bundle.route_configs)
-    if any(type(config) is not RouteConfig for config in routes):
+    if any(type(config) not in (RouteConfig, NativeRouteConfig)
+           for config in routes):
         raise ValueError('host RouteConfig sequence required')
     contexts = route_bundle.contexts
+    native = {}
+    for config in routes:
+        if type(config) is NativeRouteConfig:
+            key = (config.model, config.adapter, config.environment_ref)
+            ctx = contexts.get(key)
+            if type(ctx) is not NativeRouteConfig or ctx != config:
+                raise ValueError('native route context required')
+            native[key] = config
     planner = ProfilePlanner(registry, routes, TEXT_WORKSPACE)
 
     def evidence(run, request):
+        for key, config in native.items():
+            ctx = contexts.get(key)
+            if type(ctx) is not NativeRouteConfig or ctx != config:
+                raise TypeError('native route context changed')
         # operation_key is safe before any per-Run check: a missing or
         # malformed profile must deny, never AttributeError into global.
         profile = getattr(run, 'profile', None)
@@ -74,6 +88,10 @@ def make_evidence(store, registry, route_bundle):
                 hard_deny=True)
 
         def refs(ctx):
+            if type(ctx) is NativeRouteConfig:
+                return ('registry:' + rdigest,
+                        'native-measurement:' + ctx.measurement_digest,
+                        ctx.environment_ref)
             return ('registry:' + rdigest,
                     'route-profile:' + ctx.profile.profile_digest,
                     ctx.environment_ref,
@@ -141,15 +159,17 @@ def make_evidence(store, registry, route_bundle):
                 protection_verified=True)
 
         conditions = request.conditions
-        ctx = contexts.get((conditions.model, conditions.adapter,
-                            conditions.environment_ref))
+        key = (conditions.model, conditions.adapter,
+               conditions.environment_ref)
+        ctx = contexts.get(key)
         job = next((j for j in view.jobs
                     if j.job_id == request.ref.job_id), None)
         if (ctx is None or job != plan.job
                 or request.action != plan.action
                 or request.method != plan.method
                 or conditions not in plan.conditions
-                or conditions.adapter not in ADAPTERS):
+                or (conditions.adapter not in ADAPTERS
+                    and key not in native)):
             return denied()
         return TrustedEvidence(
             request_digest=body_digest(request),

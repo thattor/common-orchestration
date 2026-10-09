@@ -128,6 +128,17 @@ model calls. Do not silently create, overwrite, move or remeasure state to
 make a reference work. No global Skill or Plugin installation is required
 by this convention.
 
+A Git checkout of this repository may also carry
+`.agents/skills/co-task` as a relative symbolic link to
+`../../skills/co-task`, letting a supported host discover the bundled
+Skill directly from the checkout. This is repository Skill registration
+only: it installs no Plugin, changes no host or global settings, and
+creates no state or authorization. Release archives never ship the link;
+they always carry the regular `skills/co-task/SKILL.md` file under its
+explicit path, and the existing refusal of links during archive
+extraction is unchanged. Skill discovery through the checkout is separate
+from measured Skill use on a given host.
+
 ### Choosing models and running tasks
 
 Add these options to `run` **before `--verify`**:

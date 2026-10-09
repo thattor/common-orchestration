@@ -38,7 +38,10 @@ ADAPTER = "codex.app-server"
 ADAPTER_VERSION = "0.2.0-dev"
 CLI_VERSION = "codex-cli 0.156.1"
 # Exact reviewed wire versions; this is not Native host admission evidence.
-SUPPORTED_CLI_VERSIONS = frozenset({CLI_VERSION, "codex-cli 0.159.2"})
+# codex-cli 0.160.1 is a reviewed wire version for host-injected owned
+# transports only; ADAPTER_VERSION/readiness are unchanged and a version
+# string alone is never host admission evidence.
+SUPPORTED_CLI_VERSIONS = frozenset({CLI_VERSION, "codex-cli 0.159.2", "codex-cli 0.160.1"})
 FILE_APPROVAL = "item/fileChange/requestApproval"
 MAX_BYTES = 1024 * 1024
 MAX_POLL = 128
@@ -211,16 +214,26 @@ class CodexAdapter:
                  transport_factory: Callable[[ExecuteRequest], Transport] | None = None,
                  clock: Callable[[], float] = time.monotonic,
                  rpc_timeout: float = 30, permission_profile: str | None = None,
-                 reasoning_effort: str | None = None):
+                 reasoning_effort: str | None = None,
+                 approval_policy: str = "on-request",
+                 strict_text_controls: bool = False):
         if not 0 < rpc_timeout <= 300:
             raise ValueError("RPC timeout must be in (0, 300]")
+        if approval_policy not in ("on-request", "never"):
+            raise ValueError("unsupported approval policy")
         if permission_profile is not None and (type(permission_profile) is not str
                 or not re.fullmatch(r"co_readonly_[0-9a-f]{32}", permission_profile)):
             raise ValueError("invalid trusted permission profile")
         if reasoning_effort is not None and (permission_profile is None
                 or type(reasoning_effort) is not str or not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", reasoning_effort)):
             raise ValueError("invalid trusted reasoning effort")
+        if (type(strict_text_controls) is not bool
+                or (strict_text_controls and (permission_profile is None
+                                            or reasoning_effort is None
+                                            or approval_policy != "never"))):
+            raise ValueError("invalid strict text controls")
         self._profile, self._effort = permission_profile, reasoning_effort
+        self._approval_policy, self._strict_text = approval_policy, strict_text_controls
         self._verify = verify_host
         self._factory = transport_factory
         self._clock = clock
@@ -386,23 +399,31 @@ class CodexAdapter:
             attempt.transport.send({"method": "initialized"})
             params = {
                 "model": c.model, "modelProvider": "openai", "cwd": c.workspace,
-                "sandbox": "read-only", "approvalPolicy": "on-request",
+                "sandbox": "read-only", "approvalPolicy": self._approval_policy,
                 "approvalsReviewer": "user", "ephemeral": True,
             }
             if self._profile is not None:
                 del params["sandbox"]
                 params.update(permissions=self._profile, environments=[])
+            if self._strict_text:
+                params.update(dynamicTools=[], allowProviderModelFallback=False,
+                              serviceTier="default")
             self._rpc(attempt, "thread/start", params)
         elif method == "thread/start":
             thread = result.get("thread", {}).get("id")
             if (not isinstance(thread, str) or not thread or result.get("model") != c.model
                     or result.get("modelProvider") != "openai" or result.get("cwd") != c.workspace
-                    or result.get("approvalPolicy") != "on-request"
+                    or result.get("approvalPolicy") != self._approval_policy
                     or result.get("approvalsReviewer") != "user"
                     or (self._profile is None and result.get("sandbox", {}).get("type") != "readOnly")
                     or (self._profile is not None and result.get("activePermissionProfile") not in (
                         {"id": self._profile}, {"id": self._profile, "extends": None}))
-                    or (self._effort is not None and result.get("reasoningEffort") != self._effort)):
+                    or (self._effort is not None and result.get("reasoningEffort") != self._effort)
+                    or (self._strict_text and (
+                        result.get("dynamicTools", []) != []
+                        or result.get("allowProviderModelFallback", False) is not False
+                        or "serviceTier" not in result
+                        or result["serviceTier"] not in (None, "default")))):
                 raise NativeError("effective Native configuration mismatch")
             attempt.thread = thread
             self._verify(attempt.request, "turn", result)

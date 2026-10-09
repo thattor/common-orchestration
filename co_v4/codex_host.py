@@ -44,6 +44,29 @@ OVERRIDES = ("mcp_servers={}", "plugins={}", "hooks={}", "notify=[]",
              "shell_environment_policy.set={}", "shell_environment_policy.include_only=[]",
              *("features." + name + "=false" for name in DISABLED_FEATURES))
 
+# Exact Native releases reviewed for trusted host composition. This is an
+# exact allowlist, not a version range; an unknown Native build is refused.
+SUPPORTED_NATIVE_VERSIONS = frozenset({"codex-cli 0.159.2", "codex-cli 0.160.1"})
+
+# Opt-in feature gates observed in the codex-cli 0.160.1 effective config
+# readback. They are sent and verified only for an explicitly configured
+# 0.160.1 named-permission launch; the legacy composition keeps
+# DISABLED_FEATURES/OVERRIDES unchanged. This is a denial readback, not
+# containment proof for Native in-process tools, and no plan, question or
+# applyPatch control is claimed verified by it.
+FEATURES_01601 = (
+    "apps", "auth_elicitation", "browser_use", "browser_use_external",
+    "browser_use_full_cdp_access", "chronicle", "code_mode", "code_mode_host",
+    "code_mode_only", "code_mode_prewarm", "computer_use", "daemon_auto_start",
+    "default_mode_request_user_input", "enable_mcp_apps", "goals",
+    "guardian_conversation_history_tools", "hooks", "image_generation",
+    "memories", "multi_agent", "multi_agent_v2", "plugins",
+    "realtime_conversation", "remote_control", "remote_plugin",
+    "request_permissions_tool", "shell_snapshot", "shell_snapshot_v2",
+    "shell_tool", "skill_mcp_dependency_install", "skill_search",
+    "sleep_tool", "tool_suggest", "unified_exec", "view_image",
+    "workspace_dependencies")
+
 # Diagnostic names only, from the fixed 0.159.2 ServerNotification schema.
 # This map does not admit any notification or retain parameter values.
 _DIAGNOSTIC_NOTIFICATION_KEYS = {
@@ -133,6 +156,9 @@ class CodexHostConfig:
     use_named_permissions: bool = False
     reasoning_effort: str | None = None
     mode: str | None = None
+    native_version: str = "codex-cli 0.159.2"
+    approval_policy: str = "on-request"
+    strict_text_controls: bool = False
 
 
 def _identity(path: Path):
@@ -150,14 +176,26 @@ class CodexReadOnlyHost:
     the host for another Attempt is refused; create a new composition instead.
     """
 
-    def __init__(self, config: CodexHostConfig):
+    def __init__(self, config: CodexHostConfig, transport_factory=None):
+        if transport_factory is not None and not callable(transport_factory):
+            raise HostUnverified("invalid_transport_factory")
         if (type(config.use_named_permissions) is not bool or (config.reasoning_effort is not None
                 and (not config.use_named_permissions or type(config.reasoning_effort) is not str
                      or not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", config.reasoning_effort)))):
             raise HostUnverified("invalid_profile_configuration")
+        if (config.native_version not in SUPPORTED_NATIVE_VERSIONS
+                or config.approval_policy not in ("on-request", "never")
+                or type(config.strict_text_controls) is not bool
+                or (config.approval_policy == "never" and not config.use_named_permissions)
+                or (config.strict_text_controls and (
+                    config.native_version != "codex-cli 0.160.1"
+                    or not config.use_named_permissions or config.reasoning_effort is None
+                    or config.approval_policy != "never"))):
+            raise HostUnverified("invalid_native_configuration")
         if config.use_named_permissions:
             validate_selection(config.conditions.model, config.reasoning_effort)
         self._service_tier = select_service_tier(config.mode)
+        self._factory = transport_factory
         self.config = config
         self._profile_name = "co_readonly_" + uuid4().hex if config.use_named_permissions else None
         self._request_digest = None
@@ -173,7 +211,10 @@ class CodexReadOnlyHost:
 
     def make_adapter(self):
         return CodexAdapter(verify_host=self.verify, transport_factory=self.transport,
-                            permission_profile=self._profile_name, reasoning_effort=self.config.reasoning_effort)
+                            permission_profile=self._profile_name,
+                            reasoning_effort=self.config.reasoning_effort,
+                            approval_policy=self.config.approval_policy,
+                            strict_text_controls=self.config.strict_text_controls)
 
     def _targets(self):
         c = self.config
@@ -231,6 +272,12 @@ class CodexReadOnlyHost:
                  "disabled_mcp_servers": self.config.disabled_mcp_servers,
                  "cleared_environment_keys": self.config.cleared_environment_keys,
                  "delegation": asdict(self.config.delegation)}
+        c = self.config
+        if (c.native_version, c.approval_policy, c.strict_text_controls) != (
+                "codex-cli 0.159.2", "on-request", False):
+            value.update(native_version=c.native_version,
+                         approval_policy=c.approval_policy,
+                         strict_text_controls=c.strict_text_controls)
         return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
     def _before_profile_turn(self):
@@ -255,13 +302,13 @@ class CodexReadOnlyHost:
             if phase != "turn" or request != self._request or self._transport is None:
                 raise HostUnverified("unbound_native_transport")
             expected = {"model": request.conditions.model, "modelProvider": "openai",
-                        "cwd": request.conditions.workspace, "approvalPolicy": "on-request",
+                        "cwd": request.conditions.workspace, "approvalPolicy": c.approval_policy,
                         "approvalsReviewer": "user"}
             if (not isinstance(native, dict) or any(native.get(k) != v for k, v in expected.items())
                     or (self._profile_name is None and native.get("sandbox") not in (
                         {"type": "readOnly"}, {"type": "readOnly", "networkAccess": False}))
                     or (self._profile_name is not None and (
-                        self._native_version != "codex-cli 0.159.2"
+                        self._native_version != c.native_version
                         or native.get("activePermissionProfile") not in (
                             {"id": self._profile_name}, {"id": self._profile_name, "extends": None})))
                     or (c.reasoning_effort is not None and native.get("reasoningEffort") != c.reasoning_effort)):
@@ -280,7 +327,7 @@ class CodexReadOnlyHost:
             self._probe(request, native.get("sandbox"))
             self._check_binding(request)
             if c.mode is not None:
-                if self._native_version != "codex-cli 0.159.2":
+                if self._native_version != c.native_version:
                     raise HostUnverified("mode_native_version_unsupported")
                 account = self._rpc("account/read", {"refreshToken": False})
                 usage = self._rpc("account/rateLimits/read", {})
@@ -323,20 +370,26 @@ class CodexReadOnlyHost:
         if self._profile_name is not None:
             overrides += profile_overrides(self._profile_name, self._profile_definition)
             overrides += ("features.remote_control=false",)
+            if self.config.native_version == "codex-cli 0.160.1":
+                overrides += tuple("features." + name + "=false" for name in FEATURES_01601)
             if self.config.reasoning_effort is not None:
                 overrides += ("model_reasoning_effort=" + json.dumps(self.config.reasoning_effort),)
-            profile_kwargs["required_version"] = "codex-cli 0.159.2"
+            profile_kwargs["required_version"] = self.config.native_version
+        if (self.config.native_version == "codex-cli 0.160.1"
+                and self.config.approval_policy == "never"):
+            overrides += ('approval_policy="never"', 'approvals_reviewer="user"')
         if self.config.mode is not None:
             overrides = append_service_tier_overrides(overrides, self._service_tier)
             self._sent_service_tier_overrides = overrides[-2:]
-            profile_kwargs["required_version"] = "codex-cli 0.159.2"
+            profile_kwargs["required_version"] = self.config.native_version
         self._api_environment_absent = not any(key in env for key in (
             "OPENAI_API_KEY", "OPENAI_ADMIN_KEY", "CODEX_API_KEY", "AZURE_OPENAI_API_KEY"))
-        inner = StdioTransport(str(self.config.executable), request.conditions.workspace,
-                               config_overrides=overrides, env=env, **profile_kwargs)
+        factory = self._factory if self._factory is not None else StdioTransport
+        inner = factory(str(self.config.executable), request.conditions.workspace,
+                        config_overrides=overrides, env=env, **profile_kwargs)
         self._native_version = inner.native_version
         if self._profile_name is not None:
-            if inner.native_version != "codex-cli 0.159.2":
+            if inner.native_version != self.config.native_version:
                 inner.close()
                 raise HostUnverified("profile_native_version_unsupported")
             inner = CodexProfileTransport(inner, request, self._profile_name, self.config.reasoning_effort,
@@ -354,6 +407,25 @@ class CodexReadOnlyHost:
             if (config.get("features", {}).get("remote_control") is not False
                     or (c.reasoning_effort is not None and config.get("model_reasoning_effort") != c.reasoning_effort)):
                 raise HostUnverified("effective_profile_settings_mismatch")
+            if c.native_version == "codex-cli 0.160.1":
+                # Every 0.160.1 opt-in feature must read back exactly false; a
+                # missing key is a refusal, never an assumption.
+                features = config.get("features")
+                if (not isinstance(features, dict)
+                        or any(features.get(name) is not False for name in FEATURES_01601)):
+                    raise HostUnverified("effective_profile_settings_mismatch")
+                if (c.approval_policy == "never" and (
+                        config.get("approval_policy") != "never"
+                        or config.get("approvals_reviewer") != "user")):
+                    raise HostUnverified("effective_profile_settings_mismatch")
+                # Dynamic tool/permission controls are checked only when the
+                # Native readback exposes them; absent keys add no assumption.
+                for key, want in (("dynamic_tools", []),
+                                  ("allow_provider_model_fallback", False),
+                                  ("service_tier", "default"),
+                                  ("approval_policy", c.approval_policy)):
+                    if key in config and config.get(key) != want:
+                        raise HostUnverified("effective_profile_settings_mismatch")
         servers = config.get("mcp_servers") if isinstance(config, dict) else None
         if (not isinstance(config, dict)
                 or not isinstance(servers, (dict, type(None)))

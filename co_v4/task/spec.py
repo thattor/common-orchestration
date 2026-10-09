@@ -27,7 +27,7 @@ SCHEMA_V3 = 'co.task/3'
 ROLES = frozenset({'design', 'implement', 'review'})
 ROLES_V2 = frozenset({'planner', 'design', 'implement', 'review'})
 SELECTION_MODES = frozenset({'suitability', 'usage', 'fixed'})
-ROUTES = frozenset({'claude', 'devin'})
+ROUTES = frozenset({'claude', 'codex', 'devin'})
 ANNOUNCEMENTS = frozenset({'standard', 'quiet'})
 FOCI = CATEGORIES - {'other'}
 DEFAULT_FOCUS = 'architecture_planning'
@@ -184,7 +184,7 @@ def _target(value) -> dict:
         _err('spec_invalid', 'selection target must be exactly route+model')
     route = value['route']
     if not isinstance(route, str) or route not in ROUTES:
-        _err('spec_invalid', 'selection route must be claude or devin')
+        _err('spec_invalid', 'selection route must be claude, codex, or devin')
     model = value['model']
     if (not isinstance(model, str) or not model or _size(model) is None
             or _size(model) > _MAX_MODEL_BYTES

@@ -199,6 +199,85 @@ class ArchiveTests(Fixture):
                 with self.assertRaises(ERR):
                     br.build(str(self.repo), bad, str(self.dir / 'x.tgz'))
 
+    # The single `.agents/skills/co-task` checkout-discovery link.
+    # `inventory` omits exactly that one symlink (mode 120000 whose blob
+    # is `../../skills/co-task`) from the payload; archives always ship
+    # the regular bundled Skill and keep their extraction link ban.
+    # There is no blanket `.agents` exclusion: any other entry refuses.
+    AGENTS_LINK = '.agents/skills/co-task'
+
+    def _commit_agents_link(self, target='../../skills/co-task',
+                            rel=AGENTS_LINK):
+        path = self.repo / BASE / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.unlink(missing_ok=True)
+        os.symlink(target, path)
+        return commit(self.repo)
+
+    def test_agents_exact_link_omitted_and_skill_bundled(self):
+        sha = self._commit_agents_link()
+        out = self.dir / 'linked.tgz'
+        result = br.build(str(self.repo), sha, str(out))
+        self.assertNotIn(self.AGENTS_LINK, result['files'])
+        self.assertIn('skills/co-task/SKILL.md', result['files'])
+        with tarfile.open(str(out), 'r:gz') as tar:
+            names = tar.getnames()
+            self.assertFalse(any('.agents' in n.split('/')
+                                 for n in names))
+            blob = tar.extractfile(
+                PREFIX + '/skills/co-task/SKILL.md').read()
+        self.assertEqual(blob, git(
+            self.repo, 'show', sha + ':skills/co-task/SKILL.md'))
+
+    def test_agents_wrong_link_target_refused(self):
+        for target in ('../../skills/other', '../skills/co-task',
+                       'skills/co-task', '/skills/co-task',
+                       '../../skills/co-task/'):
+            with self.subTest(target=target):
+                sha = self._commit_agents_link(target)
+                with self.assertRaises(ERR):
+                    br.build(str(self.repo), sha,
+                             str(self.dir / 'x.tgz'))
+
+    def test_symlink_elsewhere_refused(self):
+        # The exception names one exact path; a link anywhere else hits
+        # the generic mode check and refuses.
+        for rel in ('.agents/skills/other', 'co_v4/link.py',
+                    'docs-link.md'):
+            with self.subTest(rel=rel):
+                sha = self._commit_agents_link('../../skills/co-task', rel)
+                with self.assertRaises(ERR):
+                    br.build(str(self.repo), sha,
+                             str(self.dir / 'x.tgz'))
+            (self.repo / rel).unlink(missing_ok=True)
+            commit(self.repo)
+
+    def test_regular_file_at_agents_link_path_refused(self):
+        put(self.repo, self.AGENTS_LINK, b'../../skills/co-task')
+        sha = commit(self.repo)
+        with self.assertRaises(ERR):
+            br.build(str(self.repo), sha, str(self.dir / 'x.tgz'))
+
+    def test_gitlink_at_agents_link_path_refused(self):
+        git(self.repo, 'update-index', '--add', '--cacheinfo',
+            '160000,' + 'a' * 40 + ',' + self.AGENTS_LINK)
+        git(self.repo, '-c', 'user.email=t@t', '-c', 'user.name=t',
+            'commit', '-qm', 'x')
+        sha = git(self.repo, 'rev-parse', 'HEAD').decode().strip()
+        with self.assertRaises(ERR):
+            br.build(str(self.repo), sha, str(self.dir / 'x.tgz'))
+
+    def test_unknown_agents_path_refused(self):
+        for rel in ('.agents/README', '.agents/skills/co-task/SKILL.md',
+                    '.agents/skills/other/SKILL.md'):
+            with self.subTest(rel=rel):
+                put(self.repo, rel, b'x')
+                sha = commit(self.repo)
+                with self.assertRaises(ERR):
+                    br.build(str(self.repo), sha,
+                             str(self.dir / 'x.tgz'))
+            (self.repo / rel).unlink(missing_ok=True)
+            commit(self.repo)
 
     def test_excluded_dir_named_blob_refused(self):
         # A top-level BLOB named like an excluded directory is unknown

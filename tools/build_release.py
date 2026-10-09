@@ -126,6 +126,13 @@ def inventory(repo, sha):
             raise ReleaseError() from None
         rel = path
         head = rel.split('/', 1)[0]
+        # Git checkout discovery uses this link; archives retain the regular
+        # Skill payload and their existing ban on links during extraction.
+        if rel == '.agents/skills/co-task':
+            if (mode != '120000' or kind != 'blob'
+                    or _git(repo, 'show', sha + ':' + rel) != b'../../skills/co-task'):
+                raise ReleaseError()
+            continue
         if (head != rel and head in EXCLUDED_DIRS) \
                 or rel in EXCLUDED_FILES:
             continue
