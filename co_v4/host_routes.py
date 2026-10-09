@@ -12,6 +12,15 @@ environment_ref is shared by every pooled child of that route; the
 gate performs real manifest rehash, launch attestation and the /models
 probe at dispatch — nothing here is Native/Provider qualification.
 
+NativeRouteSpec declarations never touch the wire path: when any are
+configured, build_routes requires both trusted Python composition
+hooks (native_phase_b per spec -> exact NativeRouteConfig checked
+against the declaration by _native_catalog, native_factory bound at
+NATIVE_ADAPTER and never called during construction) to be callable
+before any wire or Native work. The seam composes already-declared
+configuration only — it establishes no measurement, availability,
+qualification, auth or execution authority.
+
 Two bounded readers, distinct contracts:
 - read_protected: 0600/uid/single-link/regular/NOFOLLOW — manifest and
   registry documents only;
@@ -34,7 +43,8 @@ from .launch_attestation import (LaunchAttestor, RouteUnqualified,
                                  make_models_probe)
 from .openai_transport import (HttpSseTransport, OpenAIRoute,
                                payload_digest, strict_json)
-from .profile_registry import NativeRouteConfig, RouteConfig
+from .profile_registry import (NATIVE_ADAPTER, NativeRouteConfig,
+                               RouteConfig)
 from .protocol_profile import (ProfileError, environment_ref,
                                issue_profile, verify_manifest)
 from .qualified_route import QualifiedRouteGate
@@ -432,27 +442,58 @@ class RouteBundle:
     factories: Mapping
 
 
-def build_routes(config):
-    """Phase B for every declared route; refused startup is fixed-coded."""
+def build_routes(config, *, native_phase_b=None, native_factory=None):
+    """Phase B for every declared route; refused startup is fixed-coded.
+
+    native_phase_b/native_factory are trusted Python composition kwargs
+    only — never config fields, environment lookups or user input. When
+    any exact NativeRouteSpec is declared both must be callable before
+    any wire or Native Phase B work; native_phase_b(spec) is called
+    once per Native spec in configured order and must return an exact
+    NativeRouteConfig, which _native_catalog field-checks against the
+    declaration. native_factory is bound at NATIVE_ADAPTER and never
+    called during construction. Wire-only builds are unchanged."""
     if type(config) is not HostConfig:
         raise ValueError('closed host configuration required')
     keys = [(s.model, s.adapter, s.environment_ref)
             for s in config.routes]
     if len(set(keys)) != len(keys):
         raise RouteUnqualified('route_unqualified')
+    if (any(type(s) is NativeRouteSpec for s in config.routes)
+            and not (callable(native_phase_b)
+                     and callable(native_factory))):
+        raise RouteUnqualified('route_unqualified')
     suppliers, gates, contexts = {}, {}, {}
-    routes = []
+    wire_routes, sequence = [], []
+    native_specs, native_configs = [], []
     for spec in config.routes:
-        ctx = _phase_b(spec, suppliers, gates)
+        if type(spec) is NativeRouteSpec:
+            try:
+                ctx = native_phase_b(spec)
+                _native_catalog((spec,), (ctx,))
+            except Exception:
+                raise RouteUnqualified('route_unqualified') from None
+            native_specs.append(spec)
+            native_configs.append(ctx)
+        else:
+            ctx = _phase_b(spec, suppliers, gates)
+            wire_routes.append(ctx)
+        sequence.append(ctx)
         contexts[(ctx.model, ctx.adapter, ctx.environment_ref)] = ctx
-        routes.append(ctx)
-    configs = tuple(RouteConfig(
-        ctx.model, ctx.adapter, ctx.environment_ref, ctx.endpoint,
-        ctx.auth_ref, ctx.deadlines, ctx.max_drain_s, ctx.profile)
-        for ctx in routes)
+    configs = tuple(
+        item if type(item) is NativeRouteConfig else RouteConfig(
+            item.model, item.adapter, item.environment_ref, item.endpoint,
+            item.auth_ref, item.deadlines, item.max_drain_s, item.profile)
+        for item in sequence)
+    catalog = _catalog(wire_routes)
+    if native_specs:
+        catalog = Catalog(
+            catalog.entries
+            + _native_catalog(native_specs, native_configs).entries)
     factories = {adapter: _child_factory(contexts, adapter)
                  for adapter in ADAPTERS
                  if any(s.adapter == adapter for s in config.routes)}
-    return RouteBundle(_catalog(routes), configs,
-                       MappingProxyType(contexts),
+    if native_specs:
+        factories[NATIVE_ADAPTER] = native_factory
+    return RouteBundle(catalog, configs, MappingProxyType(contexts),
                        MappingProxyType(factories))

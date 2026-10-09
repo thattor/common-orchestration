@@ -12,7 +12,7 @@ from unittest import mock
 
 from co_v4.task import codex_route as route
 from co_v4.task import infer
-from co_v4.task.common import TaskError, canonical, digest
+from co_v4.task.common import TaskError, RouteFailure, canonical, digest
 
 
 class CodexRouteBindingTests(unittest.TestCase):
@@ -200,7 +200,203 @@ class CodexRouteBindingTests(unittest.TestCase):
         self.assertNotEqual(route.measurement_digest(low),
                             route.measurement_digest(medium))
         self.assertEqual(infer._measurement_digest(low),
-                         infer._measurement_digest(medium))
+                         route.measurement_digest(low))
+        self.assertEqual(infer._measurement_digest(medium),
+                         route.measurement_digest(medium))
+        self.assertNotEqual(infer._measurement_digest(low),
+                            infer._measurement_digest(medium))
+        for legacy_route in ('claude', 'devin'):
+            with self.subTest(legacy_route=legacy_route):
+                legacy = {
+                    'route': legacy_route,
+                    'version': '1.0.0',
+                    'model': 'legacy-model',
+                    'binary': '/opt/fixture/' + legacy_route,
+                    'version_argv': ['--version'],
+                    'models': ['legacy-model'],
+                    'config': '/opt/fixture/config.json',
+                    'native_cwd': '/opt/fixture/native',
+                    'available': True,
+                    'measured_at': 1760000000,
+                    'argv_digest': digest(b'legacy argv'),
+                    'config_digest': digest(b'legacy config'),
+                    'models_digest': digest(b'legacy models'),
+                    'tools_schema_digest': digest(b'legacy tools'),
+                    'probes': [],
+                    'known_context': [],
+                    'cost_tier': None,
+                }
+                high = dict(legacy, effort='high')
+                low_effort = dict(legacy, effort='low')
+                self.assertEqual(infer._measurement_digest(high),
+                                 infer._measurement_digest(low_effort))
+
+    def test_infer_measurement_digest_delegates_without_io(self):
+        entry = copy.deepcopy(self.entry)
+        entry.pop('measurement_digest')
+        missing = self.base / 'not-created'
+        entry['binary'] = os.fspath(missing / 'codex')
+        entry['config'] = os.fspath(missing / 'binding.json')
+        entry['native_cwd'] = os.fspath(missing / 'native')
+        with mock.patch.object(route, 'measurement_digest',
+                               wraps=route.measurement_digest) as delegate, \
+                mock.patch.object(route.os.path, 'realpath',
+                                  side_effect=AssertionError), \
+                mock.patch.object(route.os, 'open',
+                                  side_effect=AssertionError), \
+                mock.patch.object(route.os, 'stat',
+                                  side_effect=AssertionError), \
+                mock.patch.object(route.os, 'lstat',
+                                  side_effect=AssertionError), \
+                mock.patch.object(subprocess, 'Popen',
+                                  side_effect=AssertionError):
+            result = infer._measurement_digest(entry)
+        delegate.assert_called_once_with(entry)
+        self.assertEqual(result, route.measurement_digest(entry))
+        self.assertTrue(result.startswith('sha256:'))
+
+    def test_infer_validate_entry_delegates_once_to_codex_route(self):
+        sentinel = object()
+        with mock.patch.object(route, 'validate_entry',
+                               return_value=sentinel) as delegate:
+            result = infer._validate_entry(
+                self.entry, 'codex', self.MODEL,
+                self._canonical(self.native))
+        self.assertIs(result, sentinel)
+        delegate.assert_called_once_with(
+            self.entry, self.MODEL, self._canonical(self.native))
+
+    def test_infer_validate_entry_uses_full_fixture_binding(self):
+        self.assertIs(
+            infer._validate_entry(self.entry, 'codex', self.MODEL,
+                                  self._canonical(self.native)),
+            self.entry)
+        drifted = copy.deepcopy(self.entry)
+        drifted['extra'] = None
+        self.assert_unmeasured(
+            lambda: infer._validate_entry(
+                drifted, 'codex', self.MODEL,
+                self._canonical(self.native)))
+        self.assert_unmeasured(
+            lambda: infer._validate_entry(
+                self.entry, 'codex', 'gpt-4.1',
+                self._canonical(self.native)))
+        self.assert_unmeasured(
+            lambda: infer._validate_entry(
+                self.entry, 'codex', self.MODEL,
+                self._canonical(self.native) + '/.'))
+
+    def test_infer_validate_entry_propagates_interrupt_identity(self):
+        for exc in (KeyboardInterrupt('stop'), SystemExit(9)):
+            with self.subTest(error=type(exc).__name__), \
+                    mock.patch.object(route, 'validate_entry',
+                                      side_effect=exc):
+                with self.assertRaises(type(exc)) as raised:
+                    infer._validate_entry(
+                        self.entry, 'codex', self.MODEL,
+                        self._canonical(self.native))
+            self.assertIs(raised.exception, exc)
+
+    def test_infer_pinned_refuses_codex_without_side_effects(self):
+        selection = {'route': 'codex', 'model': self.MODEL,
+                     'measurement_digest': self.entry['measurement_digest']}
+        state_dir = self.base / 'state'
+        call_dir = self.base / 'call'
+        for with_callback in (False, True):
+            with self.subTest(with_callback=with_callback):
+                before_launch = mock.Mock() if with_callback else None
+                load_entry = mock.Mock(side_effect=AssertionError)
+                with mock.patch.object(infer, 'PrivateFileLock',
+                                       side_effect=AssertionError) as lock, \
+                        mock.patch.object(infer.admission, 'gate',
+                                          side_effect=AssertionError) as gate, \
+                        mock.patch.object(infer, 'private_dir',
+                                          side_effect=AssertionError) as pdir, \
+                        mock.patch.object(infer, '_spawn',
+                                          side_effect=AssertionError) as spawn, \
+                        mock.patch.object(infer, '_check_launch',
+                                          side_effect=AssertionError) as launch, \
+                        mock.patch.object(infer, '_write_private',
+                                          side_effect=AssertionError) as write, \
+                        mock.patch.object(infer, '_call_claude',
+                                          side_effect=AssertionError) as claude, \
+                        mock.patch.object(infer, '_call_devin',
+                                          side_effect=AssertionError) as devin, \
+                        mock.patch.object(infer, '_devin_capture',
+                                          side_effect=AssertionError) as capture, \
+                        mock.patch.object(infer, '_known_context',
+                                          side_effect=AssertionError) as known, \
+                        mock.patch.object(infer, '_child_env',
+                                          side_effect=AssertionError) as env, \
+                        mock.patch.object(infer, '_with_cwd_check',
+                                          side_effect=AssertionError) as cwdcheck:
+                    kwargs = ({'before_launch': before_launch}
+                              if with_callback else {})
+                    with self.assertRaises(RouteFailure) as raised:
+                        infer._infer_pinned(state_dir, selection, 'implement',
+                                            'prompt', call_dir, 30,
+                                            load_entry, **kwargs)
+                exc = raised.exception
+                self.assertEqual(exc.code, 'route_unavailable')
+                self.assertEqual(exc.outcome, 'not_started')
+                self.assertEqual(exc.phase, 'preflight')
+                self.assertEqual(exc.detail, '')
+                load_entry.assert_not_called()
+                if with_callback:
+                    before_launch.assert_not_called()
+                for trapped in (lock, gate, pdir, spawn, launch, write,
+                                claude, devin, capture, known, env,
+                                cwdcheck):
+                    trapped.assert_not_called()
+
+    def test_infer_pinned_codex_invalid_inputs_precede_refusal(self):
+        load_entry = mock.Mock(side_effect=AssertionError)
+        cases = (
+            ('', {'route': 'codex', 'model': self.MODEL,
+                  'measurement_digest': 'x'}),
+            (None, {'route': 'codex', 'model': self.MODEL,
+                    'measurement_digest': 'x'}),
+            ('prompt', None),
+            ('prompt', 'codex'),
+            ('prompt', {'route': 'codex'}),
+            ('prompt', {'route': 'codex', 'model': self.MODEL}),
+            ('prompt', {'route': 'codex', 'model': self.MODEL,
+                        'measurement_digest': ''}),
+            ('prompt', {'route': 7, 'model': self.MODEL,
+                        'measurement_digest': 'x'}),
+        )
+        for prompt, selection in cases:
+            with self.subTest(prompt=prompt, selection=selection):
+                with self.assertRaises(TaskError) as raised:
+                    infer._infer_pinned(self.base / 'state', selection,
+                                        'implement', prompt,
+                                        self.base / 'call', 30, load_entry)
+                self.assertEqual(raised.exception.code, 'input_invalid')
+        load_entry.assert_not_called()
+
+    def test_check_launch_refuses_codex_before_launch_checks(self):
+        with mock.patch.object(infer.os.path, 'isabs',
+                               side_effect=AssertionError) as isabs, \
+                mock.patch.object(infer.os.path, 'isfile',
+                                  side_effect=AssertionError) as isfile, \
+                mock.patch.object(infer.os, 'access',
+                                  side_effect=AssertionError) as access, \
+                mock.patch.object(infer, '_child_env',
+                                  side_effect=AssertionError) as env, \
+                mock.patch.object(infer, '_spawn',
+                                  side_effect=AssertionError) as spawn, \
+                mock.patch.object(infer, '_devin_models',
+                                  side_effect=AssertionError) as models, \
+                mock.patch.object(subprocess, 'Popen',
+                                  side_effect=AssertionError):
+            with self.assertRaises(RouteFailure) as raised:
+                infer._check_launch(self.entry)
+        exc = raised.exception
+        self.assertEqual((exc.code, exc.outcome, exc.phase, exc.detail),
+                         ('route_unavailable', 'not_started', 'preflight',
+                          ''))
+        for trapped in (isabs, isfile, access, env, spawn, models):
+            trapped.assert_not_called()
 
     def test_measurement_digest_performs_no_filesystem_io(self):
         entry = copy.deepcopy(self.entry)

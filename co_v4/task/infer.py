@@ -764,6 +764,9 @@ def _run_probe(name, binary, model, cwd, env, config, probe_root, timeout,
 
 
 def _measurement_digest(entry):
+    if entry["route"] == "codex":
+        from . import codex_route
+        return codex_route.measurement_digest(entry)
     body = {"route": entry["route"], "version": entry.get("version"),
             "model": entry.get("model"),
             "binary": entry.get("binary"),
@@ -955,6 +958,8 @@ def setup_routes(state_dir, native_cwd, timeout=180, reprobe=False):
 def _check_launch(entry):
     """Per-launch: binary present, version measured, config digest exact;
     devin additionally re-checks the Free cost tier before launch."""
+    if entry["route"] == "codex":
+        raise RouteFailure("route_unavailable", "not_started", "preflight")
     binary = entry["binary"]
     if not (os.path.isabs(binary) and os.path.isfile(binary)
             and os.access(binary, os.X_OK)):
@@ -983,6 +988,9 @@ def _validate_entry(e, route, model, cwd):
     equal the active code template, binary absolute, model in the
     measured list, measurement_digest recomputed. This detects drift,
     not a same-user attacker who can rewrite both data and checksum."""
+    if route == "codex":
+        from . import codex_route
+        return codex_route.validate_entry(e, model, cwd)
     if not isinstance(e, dict) or e.get("available") is not True:
         raise TaskError("route_unmeasured")
     if (e.get("version_argv") != ["--version"] or e.get("route") != route
@@ -1032,6 +1040,8 @@ def _infer_pinned(state_dir, selection, role, prompt, call_dir, timeout,
             or not isinstance(model, str) or not model
             or not isinstance(pinned, str) or not pinned):
         raise TaskError("input_invalid")
+    if route == "codex":
+        raise RouteFailure("route_unavailable", "not_started", "preflight")
     cb_state = None
     if before_launch is not None:
         cb_state = {"called": False, "error": None}
