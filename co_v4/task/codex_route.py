@@ -376,9 +376,37 @@ def _hash_path(path, max_size, executable=False, forbidden=frozenset()):
     return _read_path(path, max_size, check=check)[2]
 
 
-def _read_private_config(path):
-    return _read_path(path, _MAX_CONFIG_BYTES,
-                      check=_check_owned_config_stat, collect=True)
+def _current_auth_identity(home):
+    try:
+        st = os.stat(os.path.join(home, '.codex', 'auth.json'))
+    except FileNotFoundError:
+        return None
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:
+        _fail()
+    return (st.st_dev, st.st_ino)
+
+
+def _check_private_config_stat(st, home, before):
+    _check_owned_config_stat(st)
+    after = _current_auth_identity(home)
+    identity = (st.st_dev, st.st_ino)
+    if before is not None and identity == before or (after is not None and identity == after):
+        _fail()
+
+
+def _read_private_config(path, home):
+    before = _current_auth_identity(home)
+    try:
+        st = os.stat(path, follow_symlinks=False)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:
+        _fail()
+    if not stat.S_ISREG(st.st_mode) or (before is not None and (st.st_dev, st.st_ino) == before):
+        _fail()
+    return _read_path(path, _MAX_CONFIG_BYTES, check=lambda st: _check_private_config_stat(st, home, before), collect=True)
 
 
 def _expected_home():
@@ -511,7 +539,7 @@ def read_config(entry):
         if _within(config_path, _canonical_path(os.path.join(home, '.codex'))):
             _fail()
 
-        st, raw, config_digest = _read_private_config(config_path)
+        st, raw, config_digest = _read_private_config(config_path, home)
         if config_digest != entry['config_digest']:
             _fail()
         try:
@@ -534,8 +562,7 @@ def read_config(entry):
         _fail()
 
 
-def validate_entry(entry, model, cwd):
-    '''Validate a saved entry and return the identical object on success.'''
+def _validated_config(entry, model, cwd):
     try:
         _validate_entry_shape(entry, require_measurement=True,
                               canonical_paths=True)
@@ -547,7 +574,16 @@ def validate_entry(entry, model, cwd):
             _fail()
         if entry['measurement_digest'] != measurement_digest(entry):
             _fail()
-        read_config(entry)
+        return read_config(entry)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:
+        _fail()
+
+def validate_entry(entry, model, cwd):
+    '''Validate a saved entry and return the identical object on success.'''
+    try:
+        _validated_config(entry, model, cwd)
         return entry
     except (KeyboardInterrupt, SystemExit):
         raise

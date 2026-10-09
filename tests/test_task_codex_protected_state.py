@@ -104,7 +104,7 @@ class ProtectedStateTest(unittest.TestCase):
             def __len__(self):
                 raise OSError('x')
 
-        class BrokenPath(Path):
+        class BrokenPath(type(Path())):
 
             def __fspath__(self):
                 return BrokenString(str(self))

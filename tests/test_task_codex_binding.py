@@ -546,5 +546,192 @@ class CodexRouteBindingTests(unittest.TestCase):
                 self.assertFalse(set(opened) - set(closed))
 
 
+    def test_auth_identity_returns_dev_ino(self):
+        from co_v4.task import codex_route
+        expected = os.stat(self.credential)
+        self.assertEqual(codex_route._current_auth_identity(self.home), (expected.st_dev, expected.st_ino))
+
+    def test_auth_identity_missing_returns_none(self):
+        from co_v4.task import codex_route
+        no_auth = self.base / 'home-no-auth-file'
+        (no_auth / '.codex').mkdir(parents=True)
+        no_codex = self.base / 'home-no-codex-dir'
+        no_codex.mkdir()
+        absent = self.base / 'home-absent'
+        for home in (no_auth, no_codex, absent):
+            with self.subTest(home=os.fspath(home)):
+                self.assertIsNone(codex_route._current_auth_identity(os.fspath(home)))
+
+    def test_auth_identity_stat_errors_are_fixed(self):
+        from co_v4.task import codex_route
+        loop_error = OSError('symlink loop')
+        loop_error.errno = 62
+        for error in (PermissionError('denied'), NotADirectoryError('not a directory'), loop_error):
+            with self.subTest(error=type(error).__name__), mock.patch.object(codex_route.os, 'stat', side_effect=error):
+                self.assert_unmeasured(lambda : codex_route._current_auth_identity(self.home))
+
+    def test_auth_identity_interrupts_propagate(self):
+        from co_v4.task import codex_route
+        for exc in (KeyboardInterrupt('stop'), SystemExit('exit')):
+            with self.subTest(error=type(exc).__name__), mock.patch.object(codex_route.os, 'stat', side_effect=exc):
+                with self.assertRaises(type(exc)) as raised:
+                    codex_route._current_auth_identity(self.home)
+                self.assertIs(raised.exception, exc)
+
+    def test_private_config_missing_auth_succeeds(self):
+        from co_v4.task import codex_route
+        no_auth = self.base / 'read-no-auth'
+        (no_auth / '.codex').mkdir(parents=True)
+        no_codex = self.base / 'read-no-codex'
+        no_codex.mkdir()
+        for home in (os.fspath(no_auth), os.fspath(no_codex)):
+            with self.subTest(home=home):
+                (st, raw, config_digest) = codex_route._read_private_config(os.fspath(self.config_path), home)
+                self.assertEqual(raw, self.config_bytes)
+                self.assertEqual(config_digest, self.entry['config_digest'])
+                expected = os.stat(self.config_path)
+                self.assertEqual((st.st_dev, st.st_ino), (expected.st_dev, expected.st_ino))
+
+    def test_private_config_unrelated_auth_replacement_succeeds(self):
+        from co_v4.task import codex_route
+        with mock.patch.object(codex_route, '_current_auth_identity', side_effect=[(11, 22), (33, 44)]):
+            (st, raw, config_digest) = codex_route._read_private_config(os.fspath(self.config_path), self.home)
+        self.assertEqual(raw, self.config_bytes)
+        self.assertEqual(config_digest, self.entry['config_digest'])
+
+    def test_preopen_auth_alias_denies_without_open(self):
+        from co_v4.task import codex_route
+        auth_stat = os.stat(self.credential)
+        config_name = os.fspath(self.config_path)
+        real_stat = os.stat
+
+        def fake_stat(path, *args, **kwargs):
+            if os.fspath(path) == config_name and kwargs.get('follow_symlinks', True) is False:
+                return auth_stat
+            return real_stat(path, *args, **kwargs)
+        with mock.patch.object(codex_route.os, 'stat', side_effect=fake_stat), mock.patch.object(codex_route.os, 'open') as open_mock, mock.patch.object(codex_route.os, 'read') as read_mock:
+            self.assert_unmeasured(lambda : codex_route._read_private_config(config_name, self.home))
+        open_mock.assert_not_called()
+        read_mock.assert_not_called()
+
+    def test_auth_hardlink_config_denies_before_open(self):
+        from co_v4.task import codex_route
+        alias = self.config_dir / 'auth-link.json'
+        os.link(os.fspath(self.credential), os.fspath(alias))
+        with mock.patch.object(codex_route.os, 'open') as open_mock:
+            self.assert_unmeasured(lambda : codex_route._read_private_config(os.fspath(alias), self.home))
+        open_mock.assert_not_called()
+
+    def test_auth_symlink_target_alias_denies(self):
+        from co_v4.task import codex_route
+        os.remove(self.credential)
+        os.symlink(os.fspath(self.config_path), os.fspath(self.credential))
+        with mock.patch.object(codex_route.os, 'open') as open_mock:
+            self.assert_unmeasured(lambda : codex_route._read_private_config(os.fspath(self.config_path), self.home))
+        open_mock.assert_not_called()
+
+    def test_fd_matching_before_snapshot_denies_without_read(self):
+        from co_v4.task import codex_route
+        auth_stat = os.stat(self.credential)
+        with mock.patch.object(codex_route.os, 'fstat', side_effect=lambda fd: auth_stat), mock.patch.object(codex_route.os, 'read') as read_mock:
+            self.assert_unmeasured(lambda : codex_route._read_private_config(os.fspath(self.config_path), self.home))
+        read_mock.assert_not_called()
+
+    def test_fd_matching_after_snapshot_denies_without_read(self):
+        from co_v4.task import codex_route
+        auth_stat = os.stat(self.credential)
+        config_stat = os.stat(self.config_path)
+        with mock.patch.object(codex_route, '_current_auth_identity', side_effect=[(auth_stat.st_dev, auth_stat.st_ino), (config_stat.st_dev, config_stat.st_ino)]), mock.patch.object(codex_route.os, 'read') as read_mock:
+            self.assert_unmeasured(lambda : codex_route._read_private_config(os.fspath(self.config_path), self.home))
+        read_mock.assert_not_called()
+
+    def test_config_lstat_errors_are_fixed(self):
+        from co_v4.task import codex_route
+        loop_error = OSError('symlink loop')
+        loop_error.errno = 62
+        for error in (PermissionError('denied'), NotADirectoryError('not a directory'), loop_error):
+            with self.subTest(error=type(error).__name__), mock.patch.object(codex_route, '_current_auth_identity', return_value=None), mock.patch.object(codex_route.os, 'stat', side_effect=error):
+                self.assert_unmeasured(lambda : codex_route._read_private_config(os.fspath(self.config_path), self.home))
+
+    def test_fd_hook_snapshot_errors_are_fixed(self):
+        from co_v4.task import codex_route
+        loop_error = OSError('symlink loop')
+        loop_error.errno = 62
+        for error in (PermissionError('denied'), NotADirectoryError('not a directory'), loop_error):
+            with self.subTest(error=type(error).__name__), mock.patch.object(codex_route, '_current_auth_identity', side_effect=[None, error]):
+                self.assert_unmeasured(lambda : codex_route._read_private_config(os.fspath(self.config_path), self.home))
+
+    def test_config_lstat_interrupts_propagate(self):
+        from co_v4.task import codex_route
+        for exc in (KeyboardInterrupt('stop'), SystemExit('exit')):
+            with self.subTest(error=type(exc).__name__), mock.patch.object(codex_route, '_current_auth_identity', return_value=None), mock.patch.object(codex_route.os, 'stat', side_effect=exc):
+                with self.assertRaises(type(exc)) as raised:
+                    codex_route._read_private_config(os.fspath(self.config_path), self.home)
+                self.assertIs(raised.exception, exc)
+
+    def test_fd_hook_interrupts_propagate_and_close_once(self):
+        from co_v4.task import codex_route
+        real_close = os.close
+        for exc in (KeyboardInterrupt('stop'), SystemExit('exit')):
+            closes = []
+
+            def counting_close(fd):
+                closes.append(fd)
+                real_close(fd)
+            with self.subTest(error=type(exc).__name__), mock.patch.object(codex_route, '_current_auth_identity', side_effect=[None, exc]), mock.patch.object(codex_route.os, 'close', side_effect=counting_close):
+                with self.assertRaises(type(exc)) as raised:
+                    codex_route._read_private_config(os.fspath(self.config_path), self.home)
+                self.assertIs(raised.exception, exc)
+            self.assertEqual(len(closes), 1)
+
+    def test_fd_hook_denial_closes_once(self):
+        from co_v4.task import codex_route
+        auth_stat = os.stat(self.credential)
+        config_stat = os.stat(self.config_path)
+        closes = []
+        real_close = os.close
+
+        def counting_close(fd):
+            closes.append(fd)
+            real_close(fd)
+        with mock.patch.object(codex_route, '_current_auth_identity', side_effect=[(auth_stat.st_dev, auth_stat.st_ino), (config_stat.st_dev, config_stat.st_ino)]), mock.patch.object(codex_route.os, 'close', side_effect=counting_close):
+            self.assert_unmeasured(lambda : codex_route._read_private_config(os.fspath(self.config_path), self.home))
+        self.assertEqual(len(closes), 1)
+
+    def test_private_config_never_opens_auth(self):
+        from co_v4.task import codex_route
+        opened = []
+        real_open = os.open
+
+        def tracking_open(path, *args, **kwargs):
+            opened.append(os.fspath(path))
+            return real_open(path, *args, **kwargs)
+        with mock.patch.object(codex_route.os, 'open', side_effect=tracking_open):
+            (st, raw, config_digest) = codex_route._read_private_config(os.fspath(self.config_path), self.home)
+        self.assertEqual(opened, [os.fspath(self.config_path)])
+
+    def test_read_config_valid_binding(self):
+        from co_v4.task import codex_route
+        self.assertEqual(codex_route.read_config(copy.deepcopy(self.entry)), self.config_obj)
+
+    def test_read_config_rejects_mismatched_home(self):
+        from co_v4.task import codex_route
+        other = os.fspath(self.base / 'other-home')
+        with mock.patch.dict(os.environ, {'HOME': other}):
+            self.assert_unmeasured(lambda : codex_route.read_config(copy.deepcopy(self.entry)))
+
+    def test_read_config_rejects_codex_home(self):
+        from co_v4.task import codex_route
+        with mock.patch.dict(os.environ, {'CODEX_HOME': os.fspath(self.base / 'codex-home')}):
+            self.assert_unmeasured(lambda : codex_route.read_config(copy.deepcopy(self.entry)))
+
+    def test_read_config_denies_auth_alias_before_read(self):
+        from co_v4.task import codex_route
+        config_stat = os.stat(self.config_path)
+        with mock.patch.object(codex_route, '_current_auth_identity', return_value=(config_stat.st_dev, config_stat.st_ino)), mock.patch.object(codex_route.os, 'read') as read_mock:
+            self.assert_unmeasured(lambda : codex_route.read_config(copy.deepcopy(self.entry)))
+        read_mock.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()
