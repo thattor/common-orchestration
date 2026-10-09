@@ -899,5 +899,186 @@ class OwnedTransportBirthTests(unittest.TestCase):
         self.assertTrue(t.stopped); t.close()
 
 
+class OwnedTransportCancelIoTests(unittest.TestCase):
+    spawn = OwnedTransportTests.spawn
+
+    def test_canceled_send_refuses_before_queue_and_write(self):
+        s = self.spawn()
+        cancel = threading.Event()
+        t = s.transport(cancel=cancel)
+        cancel.set()
+        with mock.patch("os.write") as write_mock:
+            with self.assertRaises(NativeError):
+                t.send({"id": "1", "method": "m", "params": {}})
+        write_mock.assert_not_called()
+        self.assertEqual(bytes(t._outgoing), b"")
+        self.assertFalse(s.proc.stdin.closed)
+        s.proc.eof()
+        s.natural_exit()
+        t.close()
+        self.assertTrue(t.stopped)
+
+    def test_stopped_retains_queue_and_reads_late_stdout(self):
+        s = self.spawn()
+        t = s.transport(max_drain_s=1)
+        t._outgoing.extend(b'{"q":1}\n')
+        self.assertTrue(t.stop_group_only())
+        s.proc.emit(b'{"late":true}\n')
+        with mock.patch("os.write") as write_mock:
+            self.assertEqual(t.poll(), ({"late": True},))
+            self.assertEqual(t.poll(), ())
+        write_mock.assert_not_called()
+        self.assertEqual(bytes(t._outgoing), b'{"q":1}\n')
+        t.close()
+        self.assertTrue(t.stopped)
+        self.assertFalse(t.drain_clean)
+        self.assertEqual(s.events.count("stop"), 1)
+        self.assertEqual(s.events.count(("stopped", True)), 1)
+
+    def test_closed_missing_stdin_send_flush_poll_gates(self):
+        s = self.spawn()
+        t = s.transport(max_drain_s=1)
+        s.proc.stdin.close()
+        with mock.patch("os.write") as write_mock:
+            self.assertEqual(t.poll(), ())
+            with self.assertRaises(NativeError):
+                t.send({"m": 1})
+            t._outgoing.extend(b"x")
+            with self.assertRaises(NativeError):
+                t._flush()
+            with self.assertRaises(NativeError):
+                t.poll()
+        write_mock.assert_not_called()
+        self.assertEqual(bytes(t._outgoing), b"x")
+        saved = s.proc.stdin
+        s.proc.stdin = None
+        try:
+            with self.assertRaises(NativeError):
+                t.send({"m": 1})
+            with self.assertRaises(NativeError):
+                t._flush()
+        finally:
+            s.proc.stdin = saved
+        t._outgoing.clear()
+        s.proc.eof()
+        s.natural_exit()
+        t.close()
+        self.assertTrue(t.stopped)
+        self.assertTrue(t.drain_clean)
+
+    def test_closed_missing_stdout_refuses_poll_before_fd(self):
+        s = self.spawn()
+        t = s.transport(max_drain_s=1)
+        s.proc.stdout.close()
+        with mock.patch("os.read") as read_mock:
+            with self.assertRaises(NativeError):
+                t.poll()
+        read_mock.assert_not_called()
+        saved = s.proc.stdout
+        s.proc.stdout = None
+        try:
+            with self.assertRaises(NativeError):
+                t.poll()
+        finally:
+            s.proc.stdout = saved
+        s.natural_exit()
+        t.close()
+        self.assertTrue(t.stopped)
+        self.assertTrue(s.proc.stdin.closed)
+
+    def test_normal_close_flushes_queue_despite_closed(self):
+        s = self.spawn()
+        t = s.transport(max_drain_s=1)
+        t._outgoing.extend(b'{"cmd":1}\n')
+        s.proc.eof()
+        s.natural_exit()
+        os.set_blocking(s.proc.child_in, False)
+        t.close()
+        self.assertFalse(t._cancel.is_set())
+        self.assertEqual(bytes(t._outgoing), b"")
+        self.assertEqual(os.read(s.proc.child_in, 65536),
+                         b'{"cmd":1}\n')
+        self.assertEqual(t.natural_exit, 0)
+        self.assertTrue(t.validated_eof)
+        self.assertTrue(t.drain_clean)
+        self.assertFalse(t.cleanup_terminated)
+        self.assertTrue(t.stopped)
+        self.assertEqual(s.events[-1], ("stopped", True))
+
+    def test_cancel_admission_wins_queued_send(self):
+        s = self.spawn()
+        cancel = threading.Event()
+        t = s.transport(cancel=cancel)
+        outcome = []
+
+        def contender():
+            try:
+                t.send({"x": 1})
+                outcome.append("sent")
+            except NativeError:
+                outcome.append("refused")
+
+        th = threading.Thread(target=contender)
+        acquired = False
+        try:
+            t._state_lock.acquire()
+            acquired = True
+            th.start()
+            cancel.set()
+        finally:
+            if acquired:
+                t._state_lock.release()
+            th.join(5)
+        self.assertFalse(th.is_alive())
+        self.assertEqual(outcome, ["refused"])
+        self.assertEqual(bytes(t._outgoing), b"")
+        s.proc.eof()
+        s.natural_exit()
+        t.close()
+        self.assertTrue(t.stopped)
+
+    def test_canceled_drain_breaks_promptly_retaining_bytes(self):
+        s = self.spawn()
+        cancel = threading.Event()
+        t = s.transport(max_drain_s=5, cancel=cancel)
+        t._outgoing.extend(b"pending")
+        cancel.set()
+        s.proc.eof()
+        s.natural_exit()
+        with mock.patch("time.sleep") as sleep_mock, \
+                mock.patch("os.write") as write_mock:
+            t.close()
+        sleep_mock.assert_not_called()
+        write_mock.assert_not_called()
+        self.assertEqual(bytes(t._outgoing), b"pending")
+        self.assertFalse(t.validated_eof)
+        self.assertFalse(t.drain_clean)
+        self.assertEqual(t.natural_exit, 0)
+        self.assertTrue(t.stopped)
+
+    def test_inherited_framing_batching_truncated_eof(self):
+        s = self.spawn()
+        t = s.transport(max_drain_s=1)
+        t.send({"id": 1, "method": "m", "params": {"k": "v"}})
+        os.set_blocking(s.proc.child_in, False)
+        self.assertEqual(os.read(s.proc.child_in, 65536),
+                         b'{"id":1,"method":"m","params":{"k":"v"}}\n')
+        frame = '{"k":"あ"}\n'.encode()
+        s.proc.emit(b'{"a":1}\n' + frame[:7])
+        self.assertEqual(t.poll(), ({"a": 1},))
+        s.proc.emit(frame[7:])
+        self.assertEqual(t.poll(), ({"k": "あ"},))
+        s.proc.emit(b'{"c":3')
+        s.proc.eof()
+        self.assertEqual(t.poll(), ())
+        with self.assertRaises(NativeError):
+            t.poll()
+        s.natural_exit()
+        t.close()
+        self.assertFalse(t.validated_eof)
+        self.assertFalse(t.drain_clean)
+        self.assertTrue(t.stopped)
+
+
 if __name__ == "__main__":
     unittest.main()

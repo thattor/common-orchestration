@@ -111,6 +111,12 @@ _MAX_SOURCE_BYTES = 1024 * 1024
 _READ_CHUNK = 65536
 _RESERVED_VALUES = frozenset({'auto', 'default'})
 
+_REGISTRY_NAME = 'routes2.json'
+_MAX_REGISTRY_BYTES = 4 * 1024 * 1024
+_REGISTRY_SCHEMA = 'co.routes/2'
+_REGISTRY_ROOT_KEYS = frozenset(
+    {'schema', 'created', 'cwd', 'measurements', 'candidates'})
+
 
 def _fail():
     raise TaskError('route_unmeasured') from None
@@ -414,6 +420,25 @@ def _read_private_config(path, home):
     return _read_path(path, _MAX_CONFIG_BYTES, check=lambda st: _check_private_config_stat(st, home, before), collect=True)
 
 
+def _read_private_registry(path, home):
+    '''Return guarded raw registry bytes after the private FD has closed.'''
+    before = _current_auth_identity(home)
+    try:
+        st = os.stat(path, follow_symlinks=False)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:
+        _fail()
+    if (not stat.S_ISREG(st.st_mode)
+            or (before is not None and (st.st_dev, st.st_ino) == before)):
+        _fail()
+    _st, raw, _unused_digest = _read_path(
+        path, _MAX_REGISTRY_BYTES,
+        check=lambda st: _check_private_config_stat(st, home, before),
+        collect=True)
+    return raw
+
+
 def _expected_home():
     try:
         home = pwd.getpwuid(os.geteuid()).pw_dir
@@ -596,6 +621,81 @@ def validate_entry(entry, model, cwd):
         _fail()
 
 
+def _read_measured_config(state_dir, key, model, cwd):
+    '''Return the fresh registry (entry, config) pair for one exact key.
+
+    Performs the guarded registry read, minimal closed-root validation, then
+    calls the unchanged full binding exactly once. The registry FD is closed
+    before any config opens; the pair is sequential, not an atomic snapshot.
+    '''
+    try:
+        _validate_model(model)
+        if type(key) is not str or key != 'codex/' + model:
+            _fail()
+        expected_cwd = _canonical_path(os.fspath(cwd))
+        _require_private_dir(expected_cwd)
+        state = _require_private_dir(os.fspath(state_dir))
+        home = _expected_home()
+        if (os.environ.get('HOME') != home
+                or 'CODEX_HOME' in os.environ):
+            _fail()
+        codex_dir = _canonical_path(os.path.join(home, '.codex'))
+        registry_path = os.path.join(state, _REGISTRY_NAME)
+        if (_within(state, codex_dir) or _within(registry_path, codex_dir)
+                or _within(expected_cwd, codex_dir)):
+            _fail()
+        raw = _read_private_registry(registry_path, home)
+        try:
+            text = raw.decode('utf-8', errors='strict')
+        except UnicodeDecodeError:
+            _fail()
+        stripped = text.strip()
+        if (text.startswith('\ufeff') or stripped.startswith('```')
+                or stripped.endswith('```')):
+            _fail()
+        registry = strict_json(text)
+        if (type(registry) is not dict
+                or set(registry) != _REGISTRY_ROOT_KEYS):
+            _fail()
+        if (type(registry['schema']) is not str
+                or registry['schema'] != _REGISTRY_SCHEMA
+                or type(registry['created']) is not int
+                or type(registry['cwd']) is not str
+                or registry['cwd'] != expected_cwd
+                or type(registry['measurements']) is not dict
+                or type(registry['candidates']) is not list):
+            _fail()
+        entry = registry['measurements'].get(key)
+        if type(entry) is not dict:
+            _fail()
+        _validate_entry_shape(entry, require_measurement=True,
+                              canonical_paths=True)
+        if (entry['available'] is not True or entry['model'] != model
+                or entry['native_cwd'] != expected_cwd):
+            _fail()
+        config_path = entry['config']
+        if (config_path == registry_path or not _within(config_path, state)
+                or _within(config_path, codex_dir)):
+            _fail()
+        config = _validated_config(entry, model, expected_cwd)
+        return entry, config
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:
+        _fail()
+
+
+def read_measurement(state_dir, key, model, cwd):
+    '''Return the registry entry only after the full binding validates.'''
+    try:
+        entry, _config = _read_measured_config(state_dir, key, model, cwd)
+        return entry
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:
+        _fail()
+
+
 def _capture_sources(forbidden):
     if (type(forbidden) is not frozenset
             or not 1 <= len(forbidden) <= 8):
@@ -756,6 +856,60 @@ def _validate_protected_state(protected_state, cwd):
         _fail()
 
 
+def _validate_request_binding(request, human_intent_ref, *, model,
+                              cwd, measurement_digest):
+    '''Structural in-process correlation of a typed execute request.
+
+    Pure correlation only: no metadata provenance, qualification,
+    availability, or human-authority claim is established here.
+    '''
+    from .. import contracts as c
+    try:
+        if (type(request) is not c.ExecuteRequest
+                or type(request.ref) is not c.AttemptRef
+                or type(request.job) is not c.Job
+                or type(request.conditions) is not c.ExecutionConditions):
+            _fail()
+        ref = request.ref
+        job = request.job
+        conditions = request.conditions
+        for value in (ref.run_id, ref.job_id, ref.attempt_id,
+                      job.run_id, job.job_id):
+            if type(value) is not str or not value:
+                _fail()
+        if (ref.run_id, ref.job_id) != (job.run_id, job.job_id):
+            _fail()
+        if (type(human_intent_ref) is not str or not human_intent_ref
+                or not human_intent_ref.strip()):
+            _fail()
+        evidence = conditions.control_evidence_refs
+        if type(evidence) is not tuple or not evidence:
+            _fail()
+        for item in evidence:
+            if type(item) is not str or not item:
+                _fail()
+        if (type(model) is not str or type(cwd) is not str
+                or type(measurement_digest) is not str):
+            _fail()
+        _validate_model(model)
+        _lexical_path(cwd)
+        _require_digest(measurement_digest)
+        if (type(conditions.model) is not str
+                or type(conditions.adapter) is not str
+                or type(conditions.workspace) is not str
+                or type(conditions.environment_ref) is not str
+                or conditions.model != model
+                or conditions.adapter != 'codex.app-server'
+                or conditions.workspace != cwd
+                or conditions.environment_ref
+                != 'native:' + measurement_digest):
+            _fail()
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:
+        _fail()
+
+
 __all__ = (
     'ARGV_TEMPLATE',
     'SOURCE_FILES',
@@ -763,4 +917,5 @@ __all__ = (
     'measurement_digest',
     'read_config',
     'validate_entry',
+    'read_measurement',
 )

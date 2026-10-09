@@ -203,15 +203,58 @@ class OwnedTransport(StdioTransport):
             raise launch_error
 
     def alive(self) -> bool:
-        if self._eof:
-            return False
         with self._state_lock:
-            if (self._stop_state is not None
+            if (self._cancel.is_set()
+                    or self._closed
+                    or self._eof
+                    or self._stop_state is not None
                     or self._launch_state != "started"):
                 return False
             proc = self._process
             return proc is not None and bool(
                 self._infer._leader_running(proc))
+
+    def send(self, message: dict) -> None:
+        with self._state_lock:
+            proc = self._process
+            stdin = getattr(proc, "stdin", None)
+            if (self._cancel.is_set()
+                    or self._closed
+                    or self._stop_state is not None
+                    or self._launch_state != "started"
+                    or proc is None
+                    or self._eof
+                    or stdin is None
+                    or getattr(stdin, "closed", True)):
+                raise NativeError("transport unavailable")
+            super().send(message)
+
+    def _flush(self):
+        with self._state_lock:
+            if not self._outgoing:
+                return
+            if (self._cancel.is_set()
+                    or self._stop_state is not None):
+                return
+            proc = self._process
+            stdin = getattr(proc, "stdin", None)
+            if (self._launch_state != "started"
+                    or proc is None
+                    or stdin is None
+                    or getattr(stdin, "closed", True)):
+                raise NativeError("transport unavailable")
+            super()._flush()
+
+    def poll(self) -> tuple[dict, ...]:
+        with self._state_lock:
+            proc = self._process
+            stdout = getattr(proc, "stdout", None)
+            if (self._launch_state != "started"
+                    or proc is None
+                    or stdout is None
+                    or getattr(stdout, "closed", True)):
+                raise NativeError("transport unavailable")
+            return super().poll()
 
     def close(self) -> None:
         """Idempotent shutdown; on_stopped fires once with proof only.
@@ -246,7 +289,14 @@ class OwnedTransport(StdioTransport):
         drain_exc = None
         deadline = time.monotonic() + self._max_drain_s
         try:
-            while self._outgoing and time.monotonic() < deadline:
+            while time.monotonic() < deadline:
+                with self._state_lock:
+                    if not self._outgoing:
+                        break
+                    if (self._cancel.is_set()
+                            or self._stop_state is not None):
+                        clean = False
+                        break
                 self._flush()
                 if self._outgoing:
                     time.sleep(0.01)
